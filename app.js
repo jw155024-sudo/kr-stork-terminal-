@@ -567,6 +567,14 @@
       g.fillRect(X(i) - bw / 2, vTop + (volH - 12) - h, bw, h);
     });
 
+    // 날짜 눈금
+    g.fillStyle = "#4a5666"; g.font = "9px system-ui";
+    const dd = i => rows[i][0].slice(4, 6) + "/" + rows[i][0].slice(6, 8);
+    const ly = cssH - 3;
+    g.textAlign = "left"; g.fillText(dd(0), padL, ly);
+    g.textAlign = "center"; g.fillText(dd(Math.floor(rows.length / 2)), padL + W / 2, ly);
+    g.textAlign = "right"; g.fillText(dd(rows.length - 1), padL + W, ly);
+
     // last price tag
     const lastY = Y(s.p || closes[closes.length - 1]);
     g.fillStyle = "#4da3ff"; g.fillRect(padL + W + 1, lastY - 7, padR - 2, 14);
