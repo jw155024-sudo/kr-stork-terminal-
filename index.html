@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0e13">
+<title>KR Terminal — 국내주식 전종목</title>
+<meta name="robots" content="noindex,nofollow">
+<meta name="description" content="국내 주식 전 종목 시세·외국인 수급·연속 매수 필터·차트·물타기 계산기">
+<link rel="stylesheet" href="styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230b0e13'/><path d='M22 70 L42 46 L56 58 L78 28' stroke='%234da3ff' stroke-width='8' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">KR</span>
+    <div class="brandtxt">
+      <strong>KR Terminal</strong>
+      <span id="stamp">불러오는 중…</span>
+    </div>
+    <div class="search">
+      <input id="q" type="search" placeholder="종목명 · 종목코드 검색  (/)" autocomplete="off" spellcheck="false">
+      <button id="qclear" class="qclear" aria-label="검색 지우기">×</button>
+    </div>
+  </div>
+  <div class="strip" id="strip"></div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button class="tab active" data-tab="all">전 종목 <em id="cntAll">–</em></button>
+  <button class="tab" data-tab="foreign">외국인 순매수</button>
+  <button class="tab" data-tab="filter">연속 매수 × 연속 상승</button>
+  <button class="tab" data-tab="mine">내 종목 <em id="cntMine">0</em></button>
+</nav>
+
+<section class="filters" id="filters">
+  <div class="fgroup">
+    <span class="flabel">시장</span>
+    <button class="chip on" data-market="ALL">전체</button>
+    <button class="chip" data-market="K">코스피</button>
+    <button class="chip" data-market="Q">코스닥</button>
+  </div>
+  <div class="fgroup">
+    <span class="flabel">외국인 연속매수</span>
+    <button class="chip on" data-f="0">전체</button>
+    <button class="chip" data-f="2">2일+</button>
+    <button class="chip" data-f="3">3일+</button>
+    <button class="chip" data-f="5">5일+</button>
+    <button class="chip" data-f="7">7일+</button>
+    <button class="chip" data-f="10">10일+</button>
+  </div>
+  <div class="fgroup">
+    <span class="flabel">연속 상승</span>
+    <button class="chip on" data-p="0">전체</button>
+    <button class="chip" data-p="2">2일+</button>
+    <button class="chip" data-p="3">3일+</button>
+    <button class="chip" data-p="5">5일+</button>
+  </div>
+  <div class="fgroup fgroup-right">
+    <button class="chip ghost" id="reset">필터 초기화</button>
+  </div>
+</section>
+
+<main>
+  <div class="tablebar">
+    <div class="tinfo" id="tinfo"></div>
+    <div class="tsort" id="tsort"></div>
+  </div>
+
+  <div class="tablewrap">
+    <table class="tbl" id="tbl">
+      <thead>
+        <tr>
+          <th class="c-name">종목</th>
+          <th class="c-num sortable" data-sort="p">현재가</th>
+          <th class="c-num sortable" data-sort="chp">등락률</th>
+          <th class="c-num sortable" data-sort="fv" title="가장 최근 발표된 외국인 순매수 금액(추정)">외인 순매수</th>
+          <th class="c-num sortable" data-sort="fq">순매수 주수</th>
+          <th class="c-num sortable" data-sort="fc" title="연속 순매수 일수(음수는 연속 순매도)">외인 연속</th>
+          <th class="c-num sortable" data-sort="pc" title="연속 상승 일수(음수는 연속 하락)">연속 상승</th>
+          <th class="c-num sortable hide-sm" data-sort="va">거래대금</th>
+          <th class="c-ma hide-sm">MA</th>
+          <th class="c-num hide-sm sortable" data-sort="r20">20일</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="empty" id="empty" hidden>조건에 맞는 종목이 없습니다.</div>
+    <button class="more" id="more" hidden>더 보기</button>
+  </div>
+</main>
+
+<footer class="foot">
+  <span id="srcline">데이터: 네이버 금융 · Yahoo Finance (지연 시세) · 투자 판단의 참고용이며 매매 책임은 본인에게 있습니다.</span>
+</footer>
+
+<!-- 종목 상세 -->
+<div class="drawer" id="drawer" hidden>
+  <div class="drawer-scrim" id="scrim"></div>
+  <aside class="panel" role="dialog" aria-modal="true" aria-label="종목 상세">
+    <div class="phead">
+      <div>
+        <div class="pname"><h2 id="dName">–</h2><span class="pcode" id="dCode"></span><span class="ptag" id="dMkt"></span></div>
+        <div class="pprice"><strong id="dPrice">–</strong><span id="dChg"></span></div>
+      </div>
+      <button class="close" id="dClose" aria-label="닫기">×</button>
+    </div>
+    <div class="pbody" id="dBody"></div>
+  </aside>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
