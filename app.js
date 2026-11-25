@@ -178,7 +178,8 @@
   function rowHtml(s) {
     const c = cls(s.chp);
     const fc = s.fc;
-    const fcPill = fc ? `<span class="pill ${fc > 0 ? "f" : "o"}">외인 ${fc > 0 ? fc + "일↑" : Math.abs(fc) + "일↓"}</span>`
+    const fcAmt = (state.tab === "foreign" && s.fvc) ? ` · ${won(s.fvc)}` : "";
+    const fcPill = fc ? `<span class="pill ${fc > 0 ? "f" : "o"}">외인 ${fc > 0 ? fc + "일↑" : Math.abs(fc) + "일↓"}${fcAmt}</span>`
       : '<span class="pill n">–</span>';
     const pc = s.pc;
     const pcPill = pc ? `<span class="pill ${pc > 0 ? "f" : "o"}">${pc > 0 ? pc + "일↑" : Math.abs(pc) + "일↓"}</span>`
