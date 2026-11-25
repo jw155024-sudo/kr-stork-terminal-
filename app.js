@@ -144,6 +144,9 @@
     if (q) {
       arr = arr.filter(s => s.n.toLowerCase().includes(q) || s.c.includes(q));
     }
+    if (state.tab === "foreign") {
+      arr = arr.filter(s => (s.fq > 0 || s.fv > 0));
+    }
     if (state.tab === "mine") {
       arr = arr.filter(s => state.watch.has(s.c));
     }
