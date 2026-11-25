@@ -339,6 +339,16 @@ def build_stock(row: dict, hist: list[list], trend: list[dict]) -> dict:
     if len(hist) >= 2:
         prev_close = closes[-2] if len(closes) >= 2 else None
 
+    # --- 전일 등락률(직전 거래일 종가 / 전전일 종가) 과 2거래일 누적 등락률
+    #     '오늘 등락률(chp)'은 시세 스냅샷 기준이므로, 누적은 두 일간 등락률을 복리로 합성한다.
+    pchp = None
+    if len(closes) >= 3 and closes[-1] is not None and closes[-2] is not None \
+            and closes[-3] not in (None, 0):
+        pchp = round((closes[-2] / closes[-3] - 1) * 100, 2)
+    c2d = None
+    if pchp is not None and row.get("chgPct") is not None:
+        c2d = round(((1 + row["chgPct"] / 100) * (1 + pchp / 100) - 1) * 100, 2)
+
     st = {
         "c": row["code"],
         "n": row["name"],
@@ -358,6 +368,8 @@ def build_stock(row: dict, hist: list[list], trend: list[dict]) -> dict:
         "oq": oq,
         "iq": iq,
         "pc": price_consec,
+        "pchp": pchp,
+        "c2d": c2d,
         "ma5": ma(closes, 5),
         "ma20": ma(closes, 20),
         "ma60": ma(closes, 60),

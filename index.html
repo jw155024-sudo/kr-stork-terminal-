@@ -7,7 +7,7 @@
 <title>KR Terminal — 국내주식 전종목</title>
 <meta name="robots" content="noindex,nofollow">
 <meta name="description" content="국내 주식 전 종목 시세·외국인 수급·연속 매수 필터·차트·물타기 계산기">
-<link rel="stylesheet" href="styles.css?v=20261125a">
+<link rel="stylesheet" href="styles.css?v=20261125b">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230b0e13'/><path d='M22 70 L42 46 L56 58 L78 28' stroke='%234da3ff' stroke-width='8' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 </head>
 <body>
@@ -30,6 +30,7 @@
   <button class="tab active" data-tab="all">전 종목 <em id="cntAll">–</em></button>
   <button class="tab" data-tab="foreign">외국인 순매수</button>
   <button class="tab" data-tab="filter">연속 매수 × 연속 상승</button>
+  <button class="tab" data-tab="rose">전일 상승 → 오늘 <em id="cntRose">–</em></button>
   <button class="tab" data-tab="mine">내 종목 <em id="cntMine">0</em></button>
 </nav>
 
@@ -39,6 +40,14 @@
     <button class="chip on" data-market="ALL">전체</button>
     <button class="chip" data-market="K">코스피</button>
     <button class="chip" data-market="Q">코스닥</button>
+  </div>
+  <div class="fgroup roseonly">
+    <span class="flabel">전일 상승률</span>
+    <button class="chip on" data-r="0">전체</button>
+    <button class="chip" data-r="1">+1%↑</button>
+    <button class="chip" data-r="3">+3%↑</button>
+    <button class="chip" data-r="5">+5%↑</button>
+    <button class="chip" data-r="10">+10%↑</button>
   </div>
   <div class="fgroup">
     <span class="flabel">외국인 연속매수</span>
@@ -62,6 +71,8 @@
 </section>
 
 <main>
+  <div class="rosesum roseonly" id="rosesum" hidden></div>
+
   <div class="tablebar">
     <div class="tinfo" id="tinfo"></div>
     <div class="tsort" id="tsort"></div>
@@ -74,6 +85,8 @@
           <th class="c-name">종목</th>
           <th class="c-num sortable" data-sort="p">현재가</th>
           <th class="c-num sortable" data-sort="chp">등락률</th>
+          <th class="c-num sortable roseonly" data-sort="pchp" title="직전 거래일 등락률">전일</th>
+          <th class="c-num sortable roseonly" data-sort="c2d" title="전일 + 오늘 2거래일 누적 등락률">2일 누적</th>
           <th class="c-num sortable" data-sort="fv" title="가장 최근 발표된 외국인 순매수 금액(추정)">외인 순매수</th>
           <th class="c-num sortable" data-sort="fq">순매수 주수</th>
           <th class="c-num sortable" data-sort="fc" title="연속 순매수 일수(음수는 연속 순매도)">외인 연속</th>
@@ -109,6 +122,6 @@
   </aside>
 </div>
 
-<script src="app.js?v=20261125e"></script>
+<script src="app.js?v=20261125f"></script>
 </body>
 </html>

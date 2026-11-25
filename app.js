@@ -19,6 +19,7 @@
     market: "ALL",
     fMin: 0,
     pMin: 0,
+    rMin: 0,
     q: "",
     sort: { key: "va", dir: -1 },
     limit: 120,
@@ -67,6 +68,7 @@
       renderStamp();
       renderTable();
       $("#cntAll").textContent = nf.format(d.stocks.length);
+      $("#cntRose").textContent = nf.format(d.stocks.filter(s => s.pchp > 0).length);
       $("#cntMine").textContent = state.watch.size;
       $("#srcline").insertAdjacentHTML("afterbegin", "");
     } catch (e) {
@@ -147,6 +149,11 @@
     if (state.tab === "foreign") {
       arr = arr.filter(s => (s.fq > 0 || s.fv > 0));
     }
+    if (state.tab === "rose") {
+      // 직전 거래일에 상승 마감한 종목만 (pchp: 전일 등락률)
+      arr = arr.filter(s => s.pchp !== null && s.pchp !== undefined && s.pchp > 0);
+      if (state.rMin) arr = arr.filter(s => s.pchp >= state.rMin);
+    }
     if (state.tab === "mine") {
       arr = arr.filter(s => state.watch.has(s.c));
     }
@@ -165,6 +172,7 @@
     all: [["va", "거래대금"], ["mc", "시가총액"], ["chp", "등락률"], ["fv", "외인금액"]],
     foreign: [["fv", "외인금액"], ["fq", "순매수주수"], ["fc", "연속일수"], ["va", "거래대금"]],
     filter: [["fc", "외인연속"], ["pc", "상승연속"], ["fv", "외인금액"], ["chp", "등락률"]],
+    rose: [["chp", "오늘 등락률"], ["pchp", "전일 등락률"], ["c2d", "2일 누적"], ["fc", "외인연속"]],
     mine: [["chp", "등락률"], ["fv", "외인금액"], ["r20", "20일 수익률"]]
   };
 
@@ -193,6 +201,8 @@
       <td class="c-name"><div class="nm">${star}${s.n}<span class="code">${s.c}</span><span class="mkt ${s.m}">${s.m === "K" ? "코스피" : "코스닥"}</span></div></td>
       <td data-k="p" class="mono">${fmt(s.p)}</td>
       <td data-k="chp" class="${c} mono">${chAmt} ${signedTxt(s.chp)}</td>
+      <td data-k="pchp" class="roseonly ${cls(s.pchp)} mono">${signedTxt(s.pchp)}</td>
+      <td data-k="c2d" class="roseonly ${cls(s.c2d)} mono">${signedTxt(s.c2d)}</td>
       <td data-k="fv" class="${cls(s.fv)} mono">${won(s.fv)}</td>
       <td data-k="fq" class="${cls(s.fq)} mono">${s.fq ? nf.format(s.fq) : "–"}</td>
       <td data-k="fc">${fcPill}</td>
@@ -212,10 +222,12 @@
     if (arr.length > state.limit) $("#more").textContent = `더 보기 (${nf.format(arr.length - state.limit)}개 남음)`;
 
     const base = {
-      all: "전 종목", foreign: "외국인 순매수 상위", filter: "조건 교집합", mine: "내 종목"
+      all: "전 종목", foreign: "외국인 순매수 상위", filter: "조건 교집합",
+      rose: "전일 상승 → 오늘", mine: "내 종목"
     }[state.tab];
     const bits = [];
     if (state.market !== "ALL") bits.push(state.market === "K" ? "코스피" : "코스닥");
+    if (state.rMin && state.tab === "rose") bits.push(`전일 +${state.rMin}%↑`);
     if (state.fMin) bits.push(`외인 ${state.fMin}일+`);
     if (state.pMin) bits.push(`${state.pMin}일+ 상승`);
     if (state.q) bits.push(`"${state.q}"`);
@@ -230,6 +242,28 @@
       th.classList.toggle("sorted", th.dataset.sort === state.sort.key);
       th.classList.toggle("asc", th.dataset.sort === state.sort.key && state.sort.dir === 1);
     });
+    renderRoseSum();
+  }
+
+  /* ──────────────── 전일 상승 → 오늘 한 줄 요약 ──────────────── */
+  function renderRoseSum() {
+    const el = $("#rosesum");
+    if (!el) return;
+    const d = state.data;
+    if (!d || state.tab !== "rose") { el.hidden = true; return; }
+    el.hidden = false;
+    const pool = d.stocks.filter(s => state.market === "ALL" || s.m === state.market);
+    const rose = pool.filter(s => s.pchp !== null && s.pchp !== undefined && s.pchp > 0);
+    const up = rose.filter(s => (s.chp || 0) > 0).length;
+    const dn = rose.filter(s => (s.chp || 0) < 0).length;
+    const fl = rose.length - up - dn;
+    const rate = rose.length ? (up / rose.length) * 100 : 0;
+    const mk = state.market === "ALL" ? "전체" : state.market === "K" ? "코스피" : "코스닥";
+    const fd = d.flowDate ? `${d.flowDate.slice(4, 6)}/${d.flowDate.slice(6, 8)}` : "직전";
+    el.innerHTML = `
+      <div class="rline">${mk} · 전일(${fd}) 상승 <b>${nf.format(rose.length)}</b>종목 중 오늘 상승 <b class="up">${nf.format(up)}</b>종목 <span class="rrate ${cls(rate - 50)}">${rate.toFixed(1)}%</span></div>
+      <div class="rbar"><i style="width:${Math.min(100, rate).toFixed(1)}%"></i></div>
+      <div class="rmeta">오늘 하락 ${nf.format(dn)} · 보합 ${nf.format(fl)} · 전일 상승 종목 기준</div>`;
   }
 
   /* ─────────────────────────── 상세 ─────────────────────────── */
@@ -296,7 +330,9 @@
       ["52주 최고", fmt(s.hi52)],
       ["52주 최저", fmt(s.lo52)],
       ["5일 수익률", signedTxt(s.r5, 2)],
-      ["20일 수익률", signedTxt(s.r20, 2)]
+      ["20일 수익률", signedTxt(s.r20, 2)],
+      ["전일 등락률", signedTxt(s.pchp, 2)],
+      ["2일 누적", signedTxt(s.c2d, 2)]
     ].map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join("");
 
     const fd = s.fd ? `${s.fd.slice(4, 6)}/${s.fd.slice(6, 8)}` : "–";
@@ -596,9 +632,10 @@
       $$(".tab").forEach(x => x.classList.toggle("active", x === b));
       state.tab = b.dataset.tab;
       state.limit = 120;
-      const defaults = { all: ["va", -1], foreign: ["fv", -1], filter: ["fc", -1], mine: ["pnl", -1] };
+      const defaults = { all: ["va", -1], foreign: ["fv", -1], filter: ["fc", -1], rose: ["chp", -1], mine: ["pnl", -1] };
       const [k, d] = defaults[state.tab] || ["va", -1];
       state.sort = { key: k, dir: d };
+      document.body.classList.toggle("rose", state.tab === "rose");
       if (state.tab === "mine" && state.sort.key === "pnl") state.sort = { key: "chp", dir: -1 };
       if (state.tab === "mine") state.sort = { key: "chp", dir: -1 };
       renderTable();
@@ -615,17 +652,21 @@
       } else if (c && c.dataset.p !== undefined) {
         state.pMin = Number(c.dataset.p);
         $$("#filters .chip[data-p]").forEach(x => x.classList.toggle("on", x === c));
+      } else if (c && c.dataset.r !== undefined) {
+        state.rMin = Number(c.dataset.r);
+        $$("#filters .chip[data-r]").forEach(x => x.classList.toggle("on", x === c));
       }
       state.limit = 120; renderTable();
     });
 
     $("#reset").addEventListener("click", () => {
-      state.market = "ALL"; state.fMin = 0; state.pMin = 0; state.q = ""; state.limit = 120;
+      state.market = "ALL"; state.fMin = 0; state.pMin = 0; state.rMin = 0; state.q = ""; state.limit = 120;
       $("#q").value = ""; $("#qclear").classList.remove("show");
       $$("#filters .chip").forEach(c => {
         if (c.dataset.market) c.classList.toggle("on", c.dataset.market === "ALL");
         if (c.dataset.f !== undefined) c.classList.toggle("on", c.dataset.f === "0");
         if (c.dataset.p !== undefined) c.classList.toggle("on", c.dataset.p === "0");
+        if (c.dataset.r !== undefined) c.classList.toggle("on", c.dataset.r === "0");
       });
       renderTable();
     });
