@@ -184,10 +184,11 @@
     const pcPill = pc ? `<span class="pill ${pc > 0 ? "f" : "o"}">${pc > 0 ? pc + "일↑" : Math.abs(pc) + "일↓"}</span>`
       : '<span class="pill n">–</span>';
     const star = state.watch.has(s.c) ? '<span style="color:#f5c451">★</span>' : "";
+    const chAmt = s.ch != null ? (s.ch > 0 ? "+" : "") + nf.format(s.ch) : "–";
     return `<tr data-code="${s.c}">
       <td class="c-name"><div class="nm">${star}${s.n}<span class="code">${s.c}</span><span class="mkt ${s.m}">${s.m === "K" ? "코스피" : "코스닥"}</span></div></td>
       <td data-k="p" class="mono">${fmt(s.p)}</td>
-      <td data-k="chp" class="${c} mono">${signedTxt(s.chp)}</td>
+      <td data-k="chp" class="${c} mono">${chAmt} ${signedTxt(s.chp)}</td>
       <td data-k="fv" class="${cls(s.fv)} mono">${won(s.fv)}</td>
       <td data-k="fq" class="${cls(s.fq)} mono">${s.fq ? nf.format(s.fq) : "–"}</td>
       <td data-k="fc">${fcPill}</td>
