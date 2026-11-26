@@ -6,6 +6,7 @@
 수집 소스
   * m.stock.naver.com/api/stocks/marketValue/{KOSPI|KOSDAQ} : 전 종목 시세/시총 스냅샷
   * m.stock.naver.com/api/stock/{code}/trend             : 일별 외국인/기관/개인 순매수 (최근 60거래일)
+  * m.stock.naver.com/api/stock/{code}/integration       : PER/PBR/EPS/BPS 등 투자지표 (PBR용)
   * api.finance.naver.com/siseJson.naver                 : 일별 OHLCV + 외국인소진율 (최근 약 1년)
   * m.stock.naver.com/api/index/{KOSPI|KOSDAQ}/integration : 지수 + 투자자별 수급 + 상승/하락 종목수
   * query1.finance.yahoo.com/v8/finance/chart            : 환율/나스닥선물/SOX/SOXX·SOXL·SOXS
@@ -39,6 +40,7 @@ UA_DESKTOP = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
 WORKERS = int(os.environ.get("FETCH_WORKERS", "20"))
+PBR_WORKERS = int(os.environ.get("PBR_WORKERS", "24"))   # PBR 수집 전용 병렬도
 HIST_DAYS = 60          # 상세 화면용 일별 데이터 보관 거래일 수
 FLOW_WINDOW = 30        # 연속 매수 계산에 쓰는 최대 거래일
 
@@ -286,6 +288,30 @@ def fetch_hist(code: str, start: str, end: str) -> list[list]:
     return out
 
 
+def fetch_pbr(code: str) -> float | None:
+    """PBR(배). 네이버 종목 통합 API의 투자지표에서 읽는다.
+
+    결측/0 이하/N/A는 None. 값은 최근 결산 기준 BPS 대비 현재가 비율이라
+    매일 가격에 따라 조금씩 움직인다.
+    """
+    try:
+        d = json.loads(http_get(f"https://m.stock.naver.com/api/stock/{code}/integration"))
+    except Exception:  # noqa: BLE001
+        return None
+    for info in d.get("totalInfos") or []:
+        if info.get("code") != "pbr":
+            continue
+        s = str(info.get("value") or "").replace(",", "").replace("배", "").strip()
+        if s in ("", "-", "N/A", "nan"):
+            return None
+        try:
+            v = float(s)
+        except ValueError:
+            return None
+        return round(v, 2) if v > 0 else None
+    return None
+
+
 def fetch_trend(code: str) -> list[dict]:
     url = f"https://m.stock.naver.com/api/stock/{code}/trend?pageSize=60"
     arr = json.loads(http_get(url))
@@ -330,7 +356,29 @@ def ma(closes: list[float], n: int):
     return round(sum(seg) / n, 2)
 
 
-def build_stock(row: dict, hist: list[list], trend: list[dict]) -> dict:
+def days_since_break(closes: list[float], n: int, lookback: int = 9):
+    """n일선을 상향 돌파한 뒤 지난 거래일 수 (0 = 마지막 봉에서 돌파).
+
+    장 시작 전이나 휴장일에는 b60·b120이 0건이 되므로, 최근 며칠 안에 돌파한
+    '추세전환' 종목을 목록으로 보여주기 위해 쓴다. 없으면 None.
+    """
+    L = len(closes)
+    for k in range(0, lookback + 1):
+        i = L - 1 - k
+        if i < n:
+            break
+        win = closes[i - n:i + 1]
+        if any(v is None for v in win):
+            continue
+        ma_now = sum(closes[i - n + 1:i + 1]) / n
+        ma_prev = sum(closes[i - n:i]) / n
+        if closes[i - 1] <= ma_prev and closes[i] > ma_now:
+            return k
+    return None
+
+
+def build_stock(row: dict, hist: list[list], trend: list[dict],
+                pbr_val: float | None = None) -> dict:
     """개별 종목 계산. hist는 오래된→최신 순."""
     # --- 일별 흐름(최신순) 매핑
     trend = [t for t in trend if t.get("date")]
@@ -447,6 +495,9 @@ def build_stock(row: dict, hist: list[list], trend: list[dict]) -> dict:
         "fd": flow_date,
         "fr": trend[-1].get("fratio") if trend else None,
     }
+    # PBR (주가순자산비율). 유효값(>0)만 기록한다.
+    if pbr_val is not None and pbr_val > 0:
+        st["pbr"] = round(float(pbr_val), 2)
     # 지금 보여주는 가격이 NXT 프리/애프터 시세인지 표시용 라벨
     if row.get("nxt"):
         st["nxt"] = row["nxt"]
@@ -454,6 +505,13 @@ def build_stock(row: dict, hist: list[list], trend: list[dict]) -> dict:
     for _k, _v in (("b60", b60), ("b120", b120), ("a60", a60), ("a120", a120)):
         if _v is not None:
             st[_k] = _v
+    # 최근 9거래일 내 60·120일선 상향 돌파가 있었으면 그 뒤 지난 거래일 수(0=마지막 봉)
+    x60 = days_since_break(closes, 60)
+    x120 = days_since_break(closes, 120)
+    if x60 is not None:
+        st["x60"] = x60
+    if x120 is not None:
+        st["x120"] = x120
 
     # 지수 대비 20일 수익률 (차트용 아님, 목록 정렬용)
     if len(closes) >= 21 and closes[-21]:
@@ -493,7 +551,7 @@ def main():
     prev = load_prev()
     os.makedirs(HDIR, exist_ok=True)
 
-    print("[1/5] 전 종목 시세 수집…", flush=True)
+    print("[1/6] 전 종목 시세 수집…", flush=True)
     universe = fetch_universe()
     limit = int(os.environ.get("FETCH_LIMIT", "0") or 0)
     if limit:
@@ -504,14 +562,32 @@ def main():
         print("ERROR: 종목 목록을 받지 못했습니다.", file=sys.stderr)
         return 2
 
-    print("[2/5] 지수·수급·매크로 수집…", flush=True)
+    print("[2/6] 지수·수급·매크로 수집…", flush=True)
     indices = fetch_indices()
     prev_macro = {m.get("key"): m for m in (prev.get("macro") or [])}
     macro = fetch_macro(prev_macro)
 
+    # --- PBR : 종목별 통합 API에서 병렬 수집. 실패 시 직전 수집값 유지.
+    prev_pbr = {s.get("c"): s.get("pbr") for s in (prev.get("stocks") or []) if s.get("pbr")}
+    print(f"[3/6] PBR 수집 ({len(universe)}종목, workers={PBR_WORKERS})…", flush=True)
+    pbr_map: dict[str, float | None] = {}
+    pbr_fail = 0
+    t_pbr = time.time()
+    with ThreadPoolExecutor(max_workers=PBR_WORKERS) as ex:
+        for i, (code, v) in enumerate(ex.map(lambda r: (r["code"], fetch_pbr(r["code"])), universe), 1):
+            if v is not None:
+                pbr_map[code] = v
+            else:
+                pbr_fail += 1
+                pbr_map[code] = prev_pbr.get(code)
+            if i % 1000 == 0:
+                print(f"      {i}/{len(universe)} ({time.time()-t_pbr:.0f}s)", flush=True)
+    print(f"      PBR 확보 {sum(1 for v in pbr_map.values() if v)}종목 / 응답없음 {pbr_fail} "
+          f"({time.time()-t_pbr:.0f}s)", flush=True)
+
     start = (now - timedelta(days=420)).strftime("%Y%m%d")
     end = now.strftime("%Y%m%d")
-    print(f"[3/5] 종목별 일별 시세·수급 수집 (기간 {start}~{end}, workers={WORKERS})…", flush=True)
+    print(f"[4/6] 종목별 일별 시세·수급 수집 (기간 {start}~{end}, workers={WORKERS})…", flush=True)
 
     results: dict[str, dict] = {}
     errors: list[str] = []
@@ -521,7 +597,7 @@ def main():
         try:
             hist = fetch_hist(code, start, end)
             trend = fetch_trend(code)
-            return code, build_stock(row, hist, trend)
+            return code, build_stock(row, hist, trend, pbr_map.get(code))
         except Exception as e:  # noqa: BLE001
             return code, {"__error": str(e)[:120]}
 
@@ -555,6 +631,12 @@ def main():
     up = sum(1 for s in summaries if (s.get("chp") or 0) > 0)
     down = sum(1 for s in summaries if (s.get("chp") or 0) < 0)
     flat = len(summaries) - up - down
+    pbr_n = sum(1 for s in summaries if s.get("pbr"))
+    low_pbr_n = sum(1 for s in summaries
+                    if s.get("pbr") and s["pbr"] <= 1.0
+                    and (s.get("b60") == 1 or s.get("b120") == 1
+                         or (s.get("x60") is not None and s["x60"] <= 4)
+                         or (s.get("x120") is not None and s["x120"] <= 4)))
 
     payload = {
         "generatedAt": now.isoformat(timespec="seconds"),
@@ -566,20 +648,21 @@ def main():
             "kosdaq": sum(1 for s in summaries if s["m"] == "Q"),
             "up": up, "down": down, "flat": flat,
             "errors": len(errors),
+            "pbr": pbr_n, "pbrFail": pbr_fail, "lowPbr": low_pbr_n,
         },
         "indices": indices,
         "macro": macro,
         "stocks": summaries,
     }
 
-    print("[4/5] data/market.json 기록…", flush=True)
+    print("[5/6] data/market.json 기록…", flush=True)
     tmp = os.path.join(DATA, "market.json.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
     os.replace(tmp, os.path.join(DATA, "market.json"))
 
     # 상세 히스토리 shard
-    print("[5/5] data/h/*.json shard 기록…", flush=True)
+    print("[6/6] data/h/*.json shard 기록…", flush=True)
     shards: dict[str, dict] = {}
     for code, res in results.items():
         key = code[:2]
@@ -597,6 +680,8 @@ def main():
         "flowDate": flow_date,
         "stocks": len(summaries),
         "errors": len(errors),
+        "pbr": pbr_n,
+        "lowPbr": low_pbr_n,
         "elapsedSec": round(time.time() - t0, 1),
     }
     with open(os.path.join(DATA, "meta.json"), "w", encoding="utf-8") as f:
@@ -604,7 +689,7 @@ def main():
 
     size = os.path.getsize(os.path.join(DATA, "market.json"))
     print(f"OK {len(summaries)}종목 / market.json {size/1024/1024:.2f}MB / {meta['elapsedSec']}s / "
-          f"수급기준일 {flow_date}", flush=True)
+          f"수급기준일 {flow_date} / PBR {pbr_n}종목 · 추세전환+PBR≤1 {low_pbr_n}종목", flush=True)
     if errors:
         print("실패 종목:", ",".join(errors[:20]), flush=True)
     return 0

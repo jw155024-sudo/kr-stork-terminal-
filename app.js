@@ -22,6 +22,8 @@
     pMin: 0,        // 주가 연속 상승 최소 일수
     rMin: 0,        // 전일 상승률 최소 %
     chart: "",      // "" | b60 | b120 | a60 | a120
+    pbrMax: 1,      // 추세·저PBR 탭 PBR 상한(배)
+    trend: "both",  // 추세·저PBR 탭 추세 조건: both | b60 | b120 | above
     both: false,    // 외인+기관 쌍끌이
     q: "",
     sort: { key: "va", dir: -1 },
@@ -87,6 +89,7 @@
     $("#cntFor").textContent = nf.format(st.filter(s => s.fq > 0 || s.fv > 0).length);
     $("#cntInst").textContent = nf.format(st.filter(s => s.oq > 0 || s.oc > 0).length);
     $("#cntRose").textContent = nf.format(st.filter(s => s.pchp > 0).length);
+    $("#cntPbr").textContent = nf.format(st.filter(s => hasLowPbr(s, "both", 1)).length);
     $("#cntMine").textContent = state.watch.size;
   }
 
@@ -151,6 +154,20 @@
   }
 
   /* ─────────────────────────── 목록 ─────────────────────────── */
+  /* 추세·저PBR 조건: PBR 상한 + 추세전환(60/120일선 돌파·최근 5거래일 또는 60·120 위) */
+  const BRK_WINDOW = 4;   // 돌파 후 4거래일 전까지(=최근 5거래일) 인정
+  function trendOk(s, mode) {
+    const x60 = (s.x60 != null && s.x60 <= BRK_WINDOW) || s.b60 === 1;
+    const x120 = (s.x120 != null && s.x120 <= BRK_WINDOW) || s.b120 === 1;
+    if (mode === "b60") return x60;
+    if (mode === "b120") return x120;
+    if (mode === "above") return s.a60 === 1 && s.a120 === 1;
+    return x60 || x120;
+  }
+  function hasLowPbr(s, mode, max) {
+    return s.pbr != null && s.pbr > 0 && s.pbr <= max && trendOk(s, mode);
+  }
+
   function filtered() {
     const { data } = state;
     if (!data) return [];
@@ -161,7 +178,7 @@
     if (state.oMin) arr = arr.filter(s => s.oc >= state.oMin);
     if (state.pMin) arr = arr.filter(s => s.pc >= state.pMin);
     if (state.both) arr = arr.filter(s => s.fq > 0 && s.oq > 0);
-    if (state.chart) {
+    if (state.chart && state.tab !== "lowpbr") {
       const k = state.chart;
       arr = arr.filter(s => s[k] === 1 || s[k] === true);
     }
@@ -181,6 +198,10 @@
     }
     if (state.tab === "mine") {
       arr = arr.filter(s => state.watch.has(s.c));
+    }
+    if (state.tab === "lowpbr") {
+      // 추세전환(60·120일선 돌파) + PBR 상한 이하
+      arr = arr.filter(s => hasLowPbr(s, state.trend, state.pbrMax));
     }
     const k = state.sort.key, dir = state.sort.dir;
     arr = arr.slice().sort((a, b) => {
@@ -214,6 +235,11 @@
     va: s => won(s.va),
     r20: s => `<span class="${cls(s.r20)}">${signedTxt(s.r20, 1)}</span>`,
     ma: s => maBadges(s),
+    pbr: s => {
+      if (s.pbr == null) return '<span class="flat">–</span>';
+      const k = s.pbr <= 0.5 ? "pbr-lo" : s.pbr <= 1 ? "pbr-under" : "pbr-over";
+      return `<span class="pbrv ${k}">${s.pbr.toFixed(2)}</span>`;
+    },
     pnl: s => {
       const h = state.holdings[s.c];
       if (!h || !h.q || !h.a) return '<span class="flat">–</span>';
@@ -257,6 +283,14 @@
       { k: "r20", l: "20일" },
       { k: "fv", l: "외인 순매수", hideSm: 1 },
       { k: "va", l: "거래대금", hideSm: 1 }
+    ],
+    lowpbr: [
+      { k: "pbr", l: "PBR", title: "주가순자산비율(배) · 최근 결산 BPS 대비 현재가" },
+      { k: "chp", l: "등락률" },
+      { k: "ma", l: "MA", hideSm: 1, sort: false },
+      { k: "fv", l: "외인 순매수", hideSm: 1 },
+      { k: "r20", l: "20일" },
+      { k: "va", l: "거래대금", hideSm: 1 }
     ]
   };
 
@@ -265,10 +299,15 @@
     foreign: [["fv", "외인금액"], ["fvc", "누적금액"], ["fq", "주수"], ["fc", "외인연속"], ["va", "거래대금"]],
     inst: [["oq", "기관주수"], ["oc", "기관연속"], ["fv", "외인금액"], ["va", "거래대금"]],
     rose: [["chp", "오늘"], ["pchp", "전일"], ["c2d", "2일누적"], ["fc", "외인연속"], ["pc", "상승연속"]],
-    mine: [["chp", "등락률"], ["pnl", "평가손익"], ["r20", "20일"], ["fc", "외인연속"]]
+    mine: [["chp", "등락률"], ["pnl", "평가손익"], ["r20", "20일"], ["fc", "외인연속"]],
+    lowpbr: [["pbr", "PBR 낮은순"], ["chp", "등락률"], ["r20", "20일"], ["fv", "외인금액"], ["va", "거래대금"]]
   };
 
   const CHART_LABEL = { b60: "60일선 돌파", b120: "120일선 돌파", a60: "60일선 위", a120: "120일선 위" };
+  const TREND_LABEL = {
+    both: "60/120일선 돌파(최근 5거래일)", b60: "60일선 돌파(최근 5거래일)",
+    b120: "120일선 돌파(최근 5거래일)", above: "60·120일선 위"
+  };
 
   function maBadges(s) {
     const b = (label, key) => {
@@ -283,6 +322,9 @@
   /* 종목명 아래 배지: 외인/기관 연속, 연속 상승, 이평선 돌파 */
   function badges(s) {
     const out = [];
+    if (state.tab === "lowpbr" && s.pbr != null) {
+      out.push(`<span class="pill pbrpill" title="PBR(주가순자산비율) ${s.pbr.toFixed(2)}배">PBR ${s.pbr.toFixed(2)}</span>`);
+    }
     const fcAmt = (state.tab === "foreign" && s.fvc) ? ` · ${won(s.fvc)}` : "";
     if (s.fc) {
       const t = `외국인 ${Math.abs(s.fc)}일 연속 ${s.fc > 0 ? "순매수" : "순매도"}` + (s.fvc ? ` · 누적 ${won(s.fvc)}` : "");
@@ -345,7 +387,7 @@
 
     const base = {
       all: "종합", foreign: "외국인 순매수 상위", inst: "기관 순매수 상위",
-      rose: "전일 상승 → 오늘", mine: "내 종목"
+      rose: "전일 상승 → 오늘", lowpbr: "추세전환 · 저PBR", mine: "내 종목"
     }[state.tab];
     const bits = [];
     if (state.market !== "ALL") bits.push(state.market === "K" ? "코스피" : "코스닥");
@@ -355,6 +397,10 @@
     if (state.pMin) bits.push(`${state.pMin}일+ 상승`);
     if (state.both) bits.push("쌍끌이");
     if (state.chart) bits.push(CHART_LABEL[state.chart]);
+    if (state.tab === "lowpbr") {
+      bits.push(TREND_LABEL[state.trend] || TREND_LABEL.both);
+      bits.push(`PBR ≤ ${state.pbrMax.toFixed(1)}`);
+    }
     if (state.q) bits.push(`"${state.q}"`);
     $("#tinfo").innerHTML = `<b>${nf.format(arr.length)}</b>종목 · ${base}${bits.length ? " · " + bits.join(" · ") : ""}` +
       (state.data && state.data.flowDate ? ` <span style="color:#63708a">(외인수급 ${state.data.flowDate.slice(4, 6)}/${state.data.flowDate.slice(6, 8)})</span>` : "");
@@ -368,6 +414,22 @@
       th.classList.toggle("asc", th.dataset.sort === state.sort.key && state.sort.dir === 1);
     });
     renderRoseSum();
+    renderLowPbrSum(arr);
+  }
+
+  /* ──────────────── 추세·저PBR 한 줄 요약 ──────────────── */
+  function renderLowPbrSum(arr) {
+    const el = $("#lpsum");
+    if (!el) return;
+    if (!state.data || state.tab !== "lowpbr") { el.hidden = true; return; }
+    el.hidden = false;
+    const k = arr.filter(s => s.m === "K").length;
+    const pbrs = arr.map(s => s.pbr).filter(v => v != null).sort((a, b) => a - b);
+    const med = pbrs.length ? pbrs[Math.floor((pbrs.length - 1) / 2)] : null;
+    const cond = TREND_LABEL[state.trend] || TREND_LABEL.both;
+    el.innerHTML = `
+      <div class="rline">저PBR 추세전환 <b>${nf.format(arr.length)}</b>종목 <span style="color:#63708a">(코스피 ${k} · 코스닥 ${arr.length - k})</span></div>
+      <div class="rmeta">${cond} · PBR ≤ ${state.pbrMax.toFixed(1)}배 · PBR 중앙값 <b>${med != null ? med.toFixed(2) : "–"}</b> · PBR은 최근 결산 BPS 대비 현재가(네이버 금융)</div>`;
   }
 
   /* ──────────────── 전일 상승 → 오늘 한 줄 요약 ──────────────── */
@@ -450,6 +512,7 @@
 
     const kv = [
       ["시가총액", won(s.mc)],
+      ["PBR", s.pbr != null ? s.pbr.toFixed(2) + "배" : "–"],
       ["거래량", s.v ? nf.format(s.v) : "–"],
       ["거래대금", won(s.va)],
       ["외국인 소진율", s.fr != null ? s.fr.toFixed(2) + "%" : "–"],
@@ -473,6 +536,8 @@
     if (s.fqc) consec.push(`<span class="pill n">누적 ${nf.format(s.fqc)}주 ${s.fvc ? "· " + won(s.fvc) : ""}</span>`);
     if (s.b60) consec.push('<span class="mb brk">60일선 돌파</span>');
     if (s.b120) consec.push('<span class="mb brk">120일선 돌파</span>');
+    if (!s.b60 && s.x60 != null && s.x60 <= 9) consec.push(`<span class="mb">60일선 돌파 ${s.x60}거래일 전</span>`);
+    if (!s.b120 && s.x120 != null && s.x120 <= 9) consec.push(`<span class="mb">120일선 돌파 ${s.x120}거래일 전</span>`);
 
     const hist = rows.slice(-16).reverse();
     const hrows = hist.map(r => {
@@ -763,6 +828,8 @@
     $$("#filters .chip[data-market]").forEach(c => c.classList.toggle("on", c.dataset.market === state.market));
     $$("#filters .chip[data-r]").forEach(c => c.classList.toggle("on", Number(c.dataset.r) === state.rMin));
     $$("#filters .chip[data-ch]").forEach(c => c.classList.toggle("on", (c.dataset.ch || "") === state.chart));
+    $$("#filters .chip[data-tr]").forEach(c => c.classList.toggle("on", c.dataset.tr === state.trend));
+    $$("#filters .chip[data-pb]").forEach(c => c.classList.toggle("on", Number(c.dataset.pb) === state.pbrMax));
     $("#both").classList.toggle("on", state.both);
     const groups = [["fp", "fMin", "#inF", "#wF"], ["op", "oMin", "#inO", "#wO"], ["pp", "pMin", "#inP", "#wP"]];
     groups.forEach(([attr, key, inSel, wrapSel]) => {
@@ -795,6 +862,7 @@
   function resetFilters() {
     state.market = "ALL"; state.fMin = 0; state.oMin = 0; state.pMin = 0; state.rMin = 0;
     state.chart = ""; state.both = false; state.q = ""; state.limit = 120;
+    state.trend = "both"; state.pbrMax = 1;
     $("#q").value = ""; $("#qclear").classList.remove("show");
     ["#inF", "#inO", "#inP"].forEach(s => { const el = $(s); if (el) el.value = ""; });
     syncFilters();
@@ -810,10 +878,11 @@
       $$(".tab").forEach(x => x.classList.toggle("active", x === b));
       state.tab = b.dataset.tab;
       state.limit = 120;
-      const defaults = { all: ["va", -1], foreign: ["fv", -1], inst: ["oq", -1], rose: ["chp", -1], mine: ["chp", -1] };
+      const defaults = { all: ["va", -1], foreign: ["fv", -1], inst: ["oq", -1], rose: ["chp", -1], lowpbr: ["pbr", 1], mine: ["chp", -1] };
       const [k, d] = defaults[state.tab] || ["va", -1];
       state.sort = { key: k, dir: d };
       document.body.classList.toggle("rose", state.tab === "rose");
+      document.body.classList.toggle("lp", state.tab === "lowpbr");
       setTabClass();
       renderTable();
     });
@@ -835,6 +904,10 @@
         $("#inP").value = state.pMin || "";
       } else if (c && c.dataset.ch !== undefined) {
         state.chart = c.dataset.ch;
+      } else if (c && c.dataset.tr !== undefined) {
+        state.trend = c.dataset.tr;
+      } else if (c && c.dataset.pb !== undefined) {
+        state.pbrMax = Number(c.dataset.pb);
       } else if (c && c.id === "both") {
         state.both = !state.both;
       }
