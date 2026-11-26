@@ -13,7 +13,8 @@
 
 산출물
   data/market.json        목록용 (전 종목 요약 + 지수/매크로)
-  data/h/{코드앞2자리}.json 종목 상세용 (최근 40거래일 OHLCV + 수급)
+  data/h/{코드앞2자리}.json 종목 상세용 (최근 60거래일 OHLCV + 수급)
+  data/y/{코드앞4자리}.json 차트용 일봉 OHLCV (최근 CHART_DAYS=380거래일, 완결된 봉만)
   data/meta.json          수집 상태
 """
 from __future__ import annotations
@@ -32,6 +33,7 @@ from datetime import datetime, timedelta, timezone
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, "data")
 HDIR = os.path.join(DATA, "h")
+YDIR = os.path.join(DATA, "y")
 KST = timezone(timedelta(hours=9))
 
 UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 "
@@ -41,7 +43,9 @@ UA_DESKTOP = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 
 WORKERS = int(os.environ.get("FETCH_WORKERS", "20"))
 PBR_WORKERS = int(os.environ.get("PBR_WORKERS", "24"))   # PBR 수집 전용 병렬도
-HIST_DAYS = 60          # 상세 화면용 일별 데이터 보관 거래일 수
+HIST_DAYS = 60          # 상세 화면(수급 표)용 일별 데이터 보관 거래일 수
+CHART_DAYS = 380        # 차트용 일봉 보관 거래일 수 (약 1년 6개월 · 1년 보기 + 120일선·일목균형표 선행 계산분)
+CHART_LOOKBACK = 640    # 차트용 일봉을 받아올 과거 달력 일수 (약 430거래일)
 FLOW_WINDOW = 30        # 연속 매수 계산에 쓰는 최대 거래일
 
 # NXT(넥스트레이드) 프리·애프터마켓 표시 시간대 (KST, 분 단위)
@@ -530,10 +534,68 @@ def build_stock(row: dict, hist: list[list], trend: list[dict],
             c = row["price"]
         rows.append([d, h[1], h[2], h[3], c, h[5],
                      t.get("fp"), t.get("op"), t.get("ip")])
-    return {"summary": st, "rows": rows}
+
+    # --- 차트용 일봉 (최근 CHART_DAYS 거래일, 완결된 봉만) : [YYMMDD, o, h, l, c, v]
+    #     오늘 봉은 넣지 않는다. 장중 갱신(30분 간격)마다 40MB가 넘는 차트 파일이
+    #     다시 커밋되는 것을 막고, 화면에서는 수급 shard의 당일 봉을 이어 붙여 그린다.
+    chart = []
+    for h in hist:
+        d = h[0]
+        if d == today or h[4] is None:
+            continue
+        chart.append([int(d[2:]), h[1], h[2], h[3], h[4], h[5]])
+    chart = chart[-CHART_DAYS:]
+    return {"summary": st, "rows": rows, "chart": chart}
 
 
 # ---------------------------------------------------------------- aggregation
+def write_chart_shards(results: dict[str, dict], universe: list[dict]) -> tuple[int, int]:
+    """data/y/{코드앞4자리}.json 차트용 일봉 shard.
+
+    * 내용이 같은 파일은 다시 쓰지 않는다(장중 재수집으로 커밋이 불어나는 것을 막는다).
+    * 이번 수집에서 실패한 종목은 직전 파일의 이력을 그대로 둔다.
+    * 상장폐지 등으로 유니버스에서 사라진 코드는 파일에서 지운다.
+    """
+    os.makedirs(YDIR, exist_ok=True)
+    live = {r["code"] for r in universe}
+    groups: dict[str, dict[str, list]] = {}
+    for code, res in results.items():
+        ch = res.get("chart")
+        if ch:
+            groups.setdefault(code[:4], {})[code] = ch
+
+    written = kept = 0
+    for key, obj in groups.items():
+        path = os.path.join(YDIR, f"{key}.json")
+        old_txt = None
+        merged: dict[str, list] = {}
+        if os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    old_txt = f.read()
+                merged = json.loads(old_txt)
+            except Exception:  # noqa: BLE001
+                merged, old_txt = {}, None
+        merged = {c: v for c, v in merged.items() if c in live}
+        merged.update(obj)
+        body = json.dumps(merged, ensure_ascii=False, separators=(",", ":"))
+        if body == old_txt:
+            kept += 1
+            continue
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(body)
+        os.replace(tmp, path)
+        written += 1
+
+    # 유니버스에서 사라진 코드 묶음의 파일 정리
+    prefix_live = {r["code"][:4] for r in universe}
+    for f_ in os.listdir(YDIR):
+        if f_.endswith(".json") and f_[:-5] not in prefix_live:
+            os.remove(os.path.join(YDIR, f_))
+    return written, kept
+
+
 def load_prev() -> dict:
     p = os.path.join(DATA, "market.json")
     if not os.path.exists(p):
@@ -585,7 +647,7 @@ def main():
     print(f"      PBR 확보 {sum(1 for v in pbr_map.values() if v)}종목 / 응답없음 {pbr_fail} "
           f"({time.time()-t_pbr:.0f}s)", flush=True)
 
-    start = (now - timedelta(days=420)).strftime("%Y%m%d")
+    start = (now - timedelta(days=CHART_LOOKBACK)).strftime("%Y%m%d")
     end = now.strftime("%Y%m%d")
     print(f"[4/6] 종목별 일별 시세·수급 수집 (기간 {start}~{end}, workers={WORKERS})…", flush=True)
 
@@ -675,6 +737,12 @@ def main():
             json.dump(obj, f, ensure_ascii=False, separators=(",", ":"))
     print(f"      shard {len(shards)}개", flush=True)
 
+    # 차트용 일봉 shard (변경분만 기록)
+    y_written, y_kept = write_chart_shards(results, universe)
+    y_rows = sum(len(res.get("chart") or []) for res in results.values())
+    print(f"      차트 shard 갱신 {y_written}개 / 그대로 {y_kept}개 / 평균 "
+          f"{y_rows / max(1, len(results)):.0f}봉", flush=True)
+
     meta = {
         "generatedAt": payload["generatedAt"],
         "flowDate": flow_date,
@@ -682,6 +750,7 @@ def main():
         "errors": len(errors),
         "pbr": pbr_n,
         "lowPbr": low_pbr_n,
+        "chartDays": round(y_rows / max(1, len(results))),
         "elapsedSec": round(time.time() - t0, 1),
     }
     with open(os.path.join(DATA, "meta.json"), "w", encoding="utf-8") as f:

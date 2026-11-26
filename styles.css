@@ -226,7 +226,7 @@ main{padding:10px 18px 40px;max-width:1280px;margin:0 auto}
 .drawer{position:fixed;inset:0;z-index:80}
 .drawer-scrim{position:absolute;inset:0;background:rgba(4,7,11,.62);backdrop-filter:blur(3px)}
 .panel{
-  position:absolute;top:0;right:0;height:100%;width:min(560px,100%);
+  position:absolute;top:0;right:0;height:100%;width:min(720px,100%);
   background:linear-gradient(180deg,#0e141d,#0b1017);
   border-left:1px solid var(--line2);box-shadow:var(--shadow);
   display:flex;flex-direction:column;animation:slide .18s ease-out;
@@ -251,6 +251,40 @@ main{padding:10px 18px 40px;max-width:1280px;margin:0 auto}
 canvas{width:100%;display:block;border-radius:10px;background:#0d131b;border:1px solid var(--line)}
 .legend{display:flex;gap:12px;font-size:10.5px;color:var(--tx3);margin:6px 2px 0;flex-wrap:wrap}
 .legend i{display:inline-block;width:9px;height:2px;vertical-align:middle;margin-right:4px}
+
+/* ── 종목 상세 차트 (일봉·이동평균·일목균형표·거래량) ── */
+.chinfo{font-size:10.5px;color:var(--tx3);font-weight:500;text-transform:none;letter-spacing:0;margin-left:5px}
+.chbar{display:flex;align-items:center;gap:6px;margin:0 0 7px;flex-wrap:wrap}
+.chgrp{display:flex;gap:4px}
+.chbar button{
+  border:1px solid var(--line2);background:#0f151d;color:var(--tx2);border-radius:7px;
+  font-size:11.5px;font-weight:650;padding:4px 9px;line-height:1.35;touch-action:manipulation;
+}
+.chbar button:hover{border-color:#3d5673;color:var(--tx)}
+.chbar button.on{background:#1d3350;border-color:#39628f;color:#cfe6ff}
+.chwrap{position:relative}
+canvas#chart{cursor:crosshair;touch-action:none}
+.chleg{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}
+.chleg button{
+  display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line2);background:#0f151d;
+  color:var(--tx3);border-radius:7px;font-size:11px;font-weight:650;padding:3px 8px;line-height:1.4;
+}
+.chleg button:hover{color:var(--tx2)}
+.chleg button i{display:inline-block;width:9px;height:2px;border-radius:2px;background:var(--tx3);opacity:.4}
+.chleg button.on{color:var(--tx);border-color:#3a4a5f;background:#141d28}
+.chleg button.on i{opacity:1}
+.chleg button.ichi i.sw{width:11px;height:8px;border-radius:2px;background:linear-gradient(90deg,rgba(246,70,93,.8) 50%,rgba(59,130,246,.8) 50%)}
+.chleg button.ichi.on{color:#cfe6ff;border-color:#39628f;background:#16222f}
+.chtip{
+  position:absolute;pointer-events:none;z-index:6;
+  background:rgba(9,14,21,.95);border:1px solid #2b3a4d;border-radius:9px;
+  padding:6px 8px;box-shadow:0 8px 20px rgba(0,0,0,.45);font-size:10.5px;min-width:126px;
+}
+.chtip .td{color:#a9bacd;font-weight:700;margin-bottom:3px;font-variant-numeric:tabular-nums}
+.chtip .td i{font-style:normal;color:var(--tx3);font-weight:500;margin-left:2px}
+.chtip .tg{display:grid;grid-template-columns:auto 1fr auto 1fr;gap:1px 7px;align-items:baseline}
+.chtip .tg span{color:var(--tx3);font-size:10px}
+.chtip .tg b{font-weight:650;font-variant-numeric:tabular-nums;text-align:right}
 table.mini{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
 table.mini th{font-size:10.5px;color:var(--tx3);text-align:right;padding:6px 6px;border-bottom:1px solid var(--line);font-weight:600}
 table.mini td{font-size:12px;text-align:right;padding:6px 6px;border-bottom:1px solid #171e27}

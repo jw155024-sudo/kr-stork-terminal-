@@ -478,7 +478,33 @@
       } catch (e) { rows = []; }
     }
     if (state.openCode !== code) return;
-    renderDetail(s, rows || []);
+    const chartRows = await loadChartRows(code, rows || []);
+    if (state.openCode !== code) return;
+    renderDetail(s, rows || [], chartRows);
+  }
+
+  /* 1년 차트용 일봉: data/y/{코드앞4자리}.json (완결된 봉) + 수급 shard의 당일 봉 */
+  async function loadChartRows(code, hrows) {
+    const key = code.slice(0, 4);
+    let shard = state.hcache.get("__y_" + key);
+    if (!shard) {
+      try {
+        const r = await fetch(`data/y/${key}.json`, { cache: "no-store" });
+        shard = r.ok ? await r.json() : {};
+      } catch (e) { shard = {}; }
+      state.hcache.set("__y_" + key, shard);
+    }
+    const rows = (shard[code] || []).map(r => [Number(r[0]), r[1], r[2], r[3], r[4], r[5]]);
+    // 오늘 봉(장중 체결 포함)은 수급 shard 값으로 이어 붙인다.
+    (hrows || []).forEach(r => {
+      const d = Number(String(r[0]).slice(2));
+      if (!rows.length) { rows.push([d, r[1], r[2], r[3], r[4], r[5]]); return; }
+      const last = rows[rows.length - 1];
+      if (d > last[0]) rows.push([d, r[1], r[2], r[3], r[4], r[5]]);
+      else if (d === last[0]) { last[1] = r[1]; last[2] = r[2]; last[3] = r[3]; last[4] = r[4]; last[5] = r[5]; }
+    });
+    rows.sort((a, b) => a[0] - b[0]);
+    return rows.slice(-420);
   }
 
   function paintHeader(s) {
@@ -494,7 +520,7 @@
     }
   }
 
-  function renderDetail(s, rows) {
+  function renderDetail(s, rows, chartRows) {
     const maLine = [["ma5", "5일"], ["ma20", "20일"], ["ma60", "60일"], ["ma120", "120일"], ["ma200", "200일"]]
       .map(([k, l]) => {
         const v = s[k];
@@ -560,16 +586,31 @@
       </div>
 
       <div class="sect">
-        <h3>차트 (일봉 · 최근 ${rows.length}거래일)</h3>
-        <canvas id="chart" height="230"></canvas>
-        <div class="legend">
-          <span><i style="background:#f6465d"></i>상승</span>
-          <span><i style="background:#3b82f6"></i>하락</span>
-          <span><i style="background:#22d3ee"></i>MA5</span>
-          <span><i style="background:#f5a524"></i>MA20</span>
-          <span><i style="background:#a78bfa"></i>MA60</span>
-          <span><i style="background:#63708a"></i>MA200</span>
+        <h3>차트 <span class="chinfo" id="chInfo"></span></h3>
+        <div class="chbar" id="chBar">
+          <div class="chgrp" id="chRng">
+            <button data-rng="60">3개월</button>
+            <button data-rng="120">6개월</button>
+            <button data-rng="250" class="on">1년</button>
+          </div>
+          <div class="chgrp">
+            <button id="chZo" title="축소" aria-label="축소">−</button>
+            <button id="chZi" title="확대" aria-label="확대">+</button>
+            <button id="chRs" title="1년·최근으로">초기화</button>
+          </div>
         </div>
+        <div class="chwrap" id="chWrap">
+          <canvas id="chart"></canvas>
+          <div class="chtip" id="chTip" hidden></div>
+        </div>
+        <div class="chleg" id="chLeg">
+          <button data-ch="ma5" class="on"><i style="background:${CHC.ma5}"></i>5일</button>
+          <button data-ch="ma20" class="on"><i style="background:${CHC.ma20}"></i>20일</button>
+          <button data-ch="ma60" class="on"><i style="background:${CHC.ma60}"></i>60일</button>
+          <button data-ch="ma120" class="on"><i style="background:${CHC.ma120}"></i>120일</button>
+          <button data-ch="ichi" class="on ichi"><i class="sw"></i>일목균형표</button>
+        </div>
+        <div class="hint">휠·두 손가락으로 확대/축소, 드래그·좌우 스와이프로 이동. 봉을 누르면 시·고·저·종가와 거래량이 나옵니다. 구름대는 빨강이 양운(상승), 파랑이 음운(하락)입니다.</div>
       </div>
 
       <div class="sect"><h3>종목 정보</h3><div class="kv">${kv}</div></div>
@@ -617,7 +658,8 @@
       </div>
     `;
 
-    drawChart($("#chart"), rows, s);
+    chartOpen($("#chart"), chartRows && chartRows.length ? chartRows : rows.map(r => [Number(String(r[0]).slice(2)), r[1], r[2], r[3], r[4], r[5]]), s);
+    bindChartUI();
     bindCalc(s, hold);
     $("#note").addEventListener("input", debounce(e => {
       const v = e.target.value.trim();
@@ -728,94 +770,521 @@
     compute();
   }
 
-  /* ─────────────────────────── 차트 ─────────────────────────── */
-  function drawChart(cv, rows, s) {
-    if (!cv || !rows.length) return;
+  /* ─────── 종목 상세 차트: 일봉·거래량 + 이동평균(5/20/60/120) + 일목균형표 ─────── */
+  const CHC = {
+    up: "#f6465d", down: "#3b82f6",
+    ma5: "#22d3ee", ma20: "#ff8ad4", ma60: "#ffb347", ma120: "#c2a578",
+    tenkan: "#34d399", kijun: "#f5a524", chikou: "#2f9e6e",
+    spanA: "#f87171", spanB: "#60a5fa",
+    grid: "#1a2431", axis: "#63708a"
+  };
+  const CH_MA = [["ma5", 5, CHC.ma5], ["ma20", 20, CHC.ma20], ["ma60", 60, CHC.ma60], ["ma120", 120, CHC.ma120]];
+  const CH_RANGE = { 60: "3개월", 120: "6개월", 250: "1년" };
+
+  function chOpts() {
+    const o = { ma5: 1, ma20: 1, ma60: 1, ma120: 1, ichi: 1 };
+    const s = LS.get("krt.chart", null);
+    if (s && typeof s === "object") Object.keys(o).forEach(k => { if (s[k] !== undefined) o[k] = s[k] ? 1 : 0; });
+    return o;
+  }
+
+  const CH = {
+    cv: null, g: null, wrap: null, tip: null,
+    rows: [], ind: null, code: null,
+    cssW: 0, cssH: 0, volH: 46,
+    padL: 6, padR: 58, padT: 12, padB: 16, gapV: 12,
+    view: { n: 250, end: 0 },
+    opts: chOpts(),
+    hover: null, ptrs: new Map(), drag: null, pinch: null, tap: null, lastTap: 0
+  };
+
+  function chartDate(v) {
+    const s = String(v).padStart(6, "0");
+    const yy = 2000 + Number(s.slice(0, 2)), mm = Number(s.slice(2, 4)), dd = Number(s.slice(4, 6));
+    const wd = "일월화수목금토"[new Date(yy, mm - 1, dd).getDay()];
+    return { full: `${yy}.${s.slice(2, 4)}.${s.slice(4, 6)}`, short: `${s.slice(2, 4)}/${s.slice(4, 6)}`, wd };
+  }
+
+  function chartIndicators(rows) {
+    const N = rows.length;
+    const C = new Array(N), Hh = new Array(N), Ll = new Array(N);
+    for (let i = 0; i < N; i++) { C[i] = rows[i][4]; Hh[i] = rows[i][2]; Ll[i] = rows[i][3]; }
+    const ma = step => {
+      const out = new Array(N).fill(null);
+      let sum = 0;
+      for (let i = 0; i < N; i++) {
+        sum += C[i];
+        if (i >= step) sum -= C[i - step];
+        if (i >= step - 1) out[i] = sum / step;
+      }
+      return out;
+    };
+    const mid = (a, b) => {
+      let mx = -Infinity, mn = Infinity;
+      for (let i = a; i <= b; i++) { if (Hh[i] > mx) mx = Hh[i]; if (Ll[i] < mn) mn = Ll[i]; }
+      return (mx + mn) / 2;
+    };
+    const tenkan = new Array(N).fill(null), kijun = new Array(N).fill(null);
+    for (let i = 8; i < N; i++) tenkan[i] = mid(i - 8, i);
+    for (let i = 25; i < N; i++) kijun[i] = mid(i - 25, i);
+    // 선행스팬 26봉 우측 이동 → 배열을 N+26까지 잡아 미래 영역(구름대)을 그린다
+    const spanA = new Array(N + 26).fill(null), spanB = new Array(N + 26).fill(null);
+    for (let i = 0; i < N; i++) {
+      if (tenkan[i] != null && kijun[i] != null) spanA[i + 26] = (tenkan[i] + kijun[i]) / 2;
+      if (i >= 51) spanB[i + 26] = mid(i - 51, i);
+    }
+    // 후행스팬: 종가를 26봉 왼쪽으로 이동
+    const chikou = new Array(N).fill(null);
+    for (let i = 0; i + 26 < N; i++) chikou[i] = C[i + 26];
+    return {
+      C, H: Hh, L: Ll,
+      ma5: ma(5), ma20: ma(20), ma60: ma(60), ma120: ma(120),
+      tenkan, kijun, spanA, spanB, chikou
+    };
+  }
+
+  function chartGeom() {
+    const N = CH.rows.length || 1;
+    const padL = CH.padL, padR = CH.padR, padT = CH.padT, padB = CH.padB;
+    const plotW = Math.max(40, CH.cssW - padL - padR);
+    const volH = CH.volH, gapV = CH.gapV;
+    const priceH = Math.max(60, CH.cssH - padT - padB - volH - gapV);
+    const FUT = CH.opts.ichi ? 26 : 0;
+    const n = Math.max(Math.min(20, N), Math.min(CH.view.n, N));
+    const end = Math.max(n, Math.min(CH.view.end || N, N));
+    const start = Math.max(0, end - n);
+    const cnt = end - start;
+    const sw = plotW / Math.max(1, cnt + FUT);
+    return { padL, padR, padT, padB, plotW, priceH, volH, gapV, n, end, start, cnt, sw, FUT, N };
+  }
+
+  function chartResize() {
+    const cv = CH.cv;
+    if (!cv) return;
+    const px = (cv.parentElement && cv.parentElement.clientWidth) || cv.clientWidth || 480;
+    CH.cssW = Math.max(220, Math.round(px));
+    CH.cssH = CH.cssW < 460 ? 300 : 360;
+    CH.volH = Math.round(CH.cssH * 0.18);
+    CH.padR = CH.cssW < 460 ? 50 : 58;
+  }
+
+  function chartOpen(cv, rows, s) {
+    CH.cv = cv || null;
+    CH.g = cv ? cv.getContext("2d") : null;
+    CH.wrap = cv ? cv.parentElement : null;
+    CH.tip = $("#chTip");
+    CH.rows = (rows || []).slice();
+    CH.ind = CH.rows.length ? chartIndicators(CH.rows) : null;
+    CH.code = s ? s.c : null;
+    CH.opts = chOpts();
+    CH.hover = null;
+    const N = CH.rows.length;
+    CH.view = { n: Math.min(250, Math.max(20, N)), end: N };
+    chartResize();
+    chartBind();
+    syncChBtns();
+    chartDraw();
+  }
+
+  function chartDraw() {
+    const cv = CH.cv, g = CH.g, rows = CH.rows, ind = CH.ind;
+    if (!cv || !g || !rows.length || !ind) return;
     const dpr = window.devicePixelRatio || 1;
-    const cssW = cv.clientWidth || 480, cssH = 230;
-    cv.width = cssW * dpr; cv.height = cssH * dpr;
-    cv.style.height = cssH + "px";
-    const g = cv.getContext("2d");
-    g.scale(dpr, dpr);
-    g.clearRect(0, 0, cssW, cssH);
+    const W = CH.cssW, H = CH.cssH;
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
+      cv.width = Math.round(W * dpr);
+      cv.height = Math.round(H * dpr);
+    }
+    cv.style.height = H + "px";
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+    g.fillStyle = "#0d131b";
+    g.fillRect(0, 0, W, H);
 
-    const padL = 4, padR = 44, padT = 8, volH = 46, padB = 18;
-    const W = cssW - padL - padR, H = cssH - padT - padB - volH;
-    const closes = rows.map(r => r[4]);
-    const maSeries = (n) => closes.map((_, i) => i < n - 1 ? null : closes.slice(i - n + 1, i + 1).reduce((x, y) => x + y, 0) / n);
-    const mas = { 5: maSeries(5), 20: maSeries(20), 60: maSeries(60) };
+    const o = CH.opts, N = rows.length;
+    const G = chartGeom();
+    const { padL, padR, padT, padB, plotW, priceH, volH, gapV, start, end, cnt, sw, FUT } = G;
+    const X = i => padL + (i - start + 0.5) * sw;
+    const yTop = padT, yBot = padT + priceH;
+    const vTop = yBot + gapV;
 
-    let lo = Math.min(...rows.map(r => r[3]));
-    let hi = Math.max(...rows.map(r => r[2]));
-    Object.values(mas).forEach(ser => ser.forEach(v => { if (v != null) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }));
-    if (s.ma200 != null) { lo = Math.min(lo, s.ma200); hi = Math.max(hi, s.ma200); }
-    const pad = (hi - lo) * 0.06 || 1; lo -= pad; hi += pad;
-    const X = i => padL + (W / rows.length) * (i + 0.5);
-    const Y = v => padT + H - ((v - lo) / (hi - lo)) * H;
-    const bw = Math.max(1.4, (W / rows.length) * 0.62);
+    /* ── 세로(가격) 범위: 봉 + 보조지표 + 미래 구름대 */
+    let lo = Infinity, hi = -Infinity;
+    const add = v => { if (v == null || !isFinite(v)) return; if (v < lo) lo = v; if (v > hi) hi = v; };
+    for (let i = start; i < end; i++) { add(rows[i][3]); add(rows[i][2]); }
+    if (o.ichi) for (let i = start; i < end + FUT; i++) { add(ind.spanA[i]); add(ind.spanB[i]); }
+    CH_MA.forEach(([k]) => { if (!o[k]) return; for (let i = start; i < end; i++) add(ind[k][i]); });
+    if (o.ichi) for (let i = start; i < end; i++) { add(ind.tenkan[i]); add(ind.kijun[i]); add(ind.chikou[i]); }
+    if (!isFinite(lo) || !isFinite(hi)) { lo = 0; hi = 1; }
+    if (hi <= lo) hi = lo + 1;
+    const padV = (hi - lo) * 0.06;
+    lo -= padV; hi += padV;
+    const Y = v => yBot - ((v - lo) / (hi - lo)) * priceH;
 
-    // grid
-    g.strokeStyle = "#18202b"; g.lineWidth = 1;
-    for (let i = 0; i <= 4; i++) {
-      const y = padT + (H / 4) * i;
-      g.beginPath(); g.moveTo(padL, y); g.lineTo(padL + W, y); g.stroke();
-      g.fillStyle = "#4a5666"; g.font = "9px system-ui"; g.textAlign = "left";
-      g.fillText(nf.format(Math.round(hi - ((hi - lo) / 4) * i)), padL + W + 5, y + 3);
+    /* ── 그리드 + 오른쪽 가격 눈금 */
+    g.font = "10px -apple-system,BlinkMacSystemFont,system-ui,sans-serif";
+    g.textBaseline = "middle";
+    g.strokeStyle = CHC.grid;
+    g.lineWidth = 1;
+    for (let t = 0; t <= 4; t++) {
+      const y = Math.round(yTop + (priceH / 4) * t) + 0.5;
+      g.beginPath(); g.moveTo(padL, y); g.lineTo(padL + plotW, y); g.stroke();
+      const v = hi - ((hi - lo) / 4) * t;
+      g.fillStyle = CHC.axis;
+      g.textAlign = "left";
+      g.fillText(nf.format(Math.round(v)), padL + plotW + 6, y);
     }
 
-    // candles
-    rows.forEach((r, i) => {
-      const [, o, h, l, c] = r;
-      const up = c >= o;
-      g.strokeStyle = g.fillStyle = up ? "#f6465d" : "#3b82f6";
+    /* ── 일목균형표 구름대 (캔들 아래에 깔린다) */
+    if (o.ichi) {
+      const iMax = Math.min(end + FUT, N + 26);
+      for (let i = Math.max(start + 1, 1); i < iMax; i++) {
+        const a0 = ind.spanA[i - 1], b0 = ind.spanB[i - 1], a1 = ind.spanA[i], b1 = ind.spanB[i];
+        if (a0 == null || b0 == null || a1 == null || b1 == null) continue;
+        const up = (a0 + a1) >= (b0 + b1);
+        const x0 = X(i - 1), x1 = X(i);
+        g.fillStyle = up ? "rgba(246,70,93,.16)" : "rgba(59,130,246,.16)";
+        g.beginPath();
+        g.moveTo(x0, Y(a0)); g.lineTo(x1, Y(a1)); g.lineTo(x1, Y(b1)); g.lineTo(x0, Y(b0));
+        g.closePath(); g.fill();
+      }
+    }
+
+    /* ── 캔들 */
+    const bw = Math.max(1, Math.min(11, sw * 0.66));
+    for (let i = start; i < end; i++) {
+      const r = rows[i], up = r[4] >= r[1];
+      const x = Math.round(X(i)) + 0.5;
+      g.strokeStyle = g.fillStyle = up ? CHC.up : CHC.down;
       g.lineWidth = 1;
-      const x = X(i);
-      g.beginPath(); g.moveTo(x, Y(h)); g.lineTo(x, Y(l)); g.stroke();
-      const y1 = Y(Math.max(o, c)), y2 = Y(Math.min(o, c));
-      g.fillRect(x - bw / 2, y1, bw, Math.max(1.2, y2 - y1));
-    });
-
-    // MA200 dashed
-    if (s.ma200 != null && s.ma200 > lo && s.ma200 < hi) {
-      g.strokeStyle = "rgba(99,112,138,.85)"; g.setLineDash([4, 4]); g.lineWidth = 1;
-      g.beginPath(); g.moveTo(padL, Y(s.ma200)); g.lineTo(padL + W, Y(s.ma200)); g.stroke();
-      g.setLineDash([]);
+      g.beginPath(); g.moveTo(x, Y(r[2])); g.lineTo(x, Y(r[3])); g.stroke();
+      const y1 = Y(Math.max(r[1], r[4])), y2 = Y(Math.min(r[1], r[4]));
+      if (bw > 1.8) g.fillRect(x - bw / 2, y1, bw, Math.max(1, y2 - y1));
+      else g.fillRect(x - 0.5, y1, 1, Math.max(1, y2 - y1));
     }
-    // MA lines
-    [[5, "#22d3ee"], [20, "#f5a524"], [60, "#a78bfa"]].forEach(([n, col]) => {
-      g.strokeStyle = col; g.lineWidth = 1.4; g.beginPath();
-      let started = false;
-      mas[n].forEach((v, i) => {
-        if (v == null) return;
+
+    /* ── 선 그리기 헬퍼 */
+    const line = (arr, color, width, from, to, dash) => {
+      g.strokeStyle = color;
+      g.lineWidth = width;
+      if (dash) g.setLineDash(dash);
+      g.beginPath();
+      let on = false;
+      for (let i = from; i < to; i++) {
+        const v = arr[i];
+        if (v == null) { on = false; continue; }
         const x = X(i), y = Y(v);
-        if (!started) { g.moveTo(x, y); started = true; } else g.lineTo(x, y);
-      });
+        if (!on) { g.moveTo(x, y); on = true; } else g.lineTo(x, y);
+      }
       g.stroke();
+      if (dash) g.setLineDash([]);
+    };
+
+    /* ── 이동평균선 5·20·60·120 */
+    CH_MA.forEach(([k, , c]) => { if (o[k]) line(ind[k], c, 1.3, start, end); });
+
+    /* ── 일목균형표 선 */
+    if (o.ichi) {
+      line(ind.spanA, CHC.spanA, 1, start, end + FUT);
+      line(ind.spanB, CHC.spanB, 1, start, end + FUT);
+      line(ind.tenkan, CHC.tenkan, 1.1, start, end);
+      line(ind.kijun, CHC.kijun, 1.1, start, end);
+      line(ind.chikou, CHC.chikou, 1.1, start, end);
+    }
+
+    /* ── 거래량 */
+    let vmax = 0;
+    for (let i = start; i < end; i++) if (rows[i][5] > vmax) vmax = rows[i][5];
+    vmax = vmax || 1;
+    const vh = volH - 8;
+    for (let i = start; i < end; i++) {
+      const r = rows[i], up = r[4] >= r[1];
+      const h2 = (r[5] / vmax) * vh;
+      g.fillStyle = up ? "rgba(246,70,93,.55)" : "rgba(59,130,246,.55)";
+      g.fillRect(X(i) - Math.max(1, bw) / 2, vTop + vh - h2, Math.max(1, bw), Math.max(1, h2));
+    }
+    g.strokeStyle = CHC.grid;
+    g.beginPath(); g.moveTo(padL, Math.round(vTop + vh) + 0.5); g.lineTo(padL + plotW, Math.round(vTop + vh) + 0.5); g.stroke();
+    g.fillStyle = CHC.axis; g.textAlign = "left"; g.textBaseline = "middle";
+    g.fillText(won(vmax), padL + plotW + 6, vTop + 5);
+
+    /* ── 날짜 눈금 */
+    const tickN = plotW < 380 ? 3 : 5;
+    const stepT = Math.max(1, Math.round(cnt / tickN));
+    g.textAlign = "center"; g.textBaseline = "top";
+    for (let i = start; i < end; i += stepT) {
+      const x = Math.round(X(i)) + 0.5;
+      g.strokeStyle = "rgba(33,43,56,.75)";
+      g.beginPath(); g.moveTo(x, yTop); g.lineTo(x, yBot); g.stroke();
+      g.fillStyle = CHC.axis;
+      g.fillText(chartDate(rows[i][0]).short, Math.min(x, padL + plotW), H - padB + 4);
+    }
+
+    /* ── 표시 구간 최고·최저 라벨 */
+    let hiI = start, loI = start;
+    for (let i = start; i < end; i++) {
+      if (rows[i][2] > rows[hiI][2]) hiI = i;
+      if (rows[i][3] < rows[loI][3]) loI = i;
+    }
+    const bubble = (v, i, isHigh) => {
+      const txt = (isHigh ? "▲ " : "▼ ") + fmt(v);
+      g.font = "600 9.5px -apple-system,system-ui,sans-serif";
+      const w = g.measureText(txt).width + 9;
+      const x = X(i);
+      let cx = Math.min(Math.max(padL + w / 2, x), padL + plotW - w / 2);
+      const y = Y(v);
+      const cy = isHigh ? Math.max(yTop + 9, y - 10) : Math.min(yBot - 9, y + 10);
+      g.fillStyle = isHigh ? "rgba(246,70,93,.95)" : "rgba(59,130,246,.95)";
+      if (g.roundRect) { g.beginPath(); g.roundRect(cx - w / 2, cy - 8, w, 16, 4); g.fill(); }
+      else g.fillRect(cx - w / 2, cy - 8, w, 16);
+      g.fillStyle = "#fff"; g.textAlign = "center"; g.textBaseline = "middle";
+      g.fillText(txt, cx, cy + 0.5);
+    };
+    bubble(rows[hiI][2], hiI, true);
+    bubble(rows[loI][3], loI, false);
+
+    /* ── 마지막 종가 태그 */
+    const lastI = end - 1, lastC = rows[lastI][4];
+    const prevC = lastI > 0 ? rows[lastI - 1][4] : lastC;
+    const upLast = lastC >= prevC;
+    const ly = Math.max(yTop + 8, Math.min(yBot - 8, Y(lastC)));
+    g.fillStyle = upLast ? CHC.up : CHC.down;
+    g.fillRect(padL + plotW + 1, ly - 8, padR - 3, 16);
+    g.fillStyle = "#04121f"; g.font = "700 9.5px -apple-system,system-ui,sans-serif";
+    g.textAlign = "left"; g.textBaseline = "middle";
+    g.fillText(fmt(lastC), padL + plotW + 4, ly + 0.5);
+
+    /* ── 크로스헤어 */
+    if (CH.hover && CH.hover.i >= start && CH.hover.i < end) {
+      const i = CH.hover.i, x = Math.round(X(i)) + 0.5;
+      g.save();
+      g.strokeStyle = "rgba(150,175,205,.55)";
+      g.lineWidth = 1;
+      g.setLineDash([3, 3]);
+      g.beginPath(); g.moveTo(x, yTop); g.lineTo(x, vTop + vh + 4); g.stroke();
+      const hy = Math.max(yTop, Math.min(yBot, CH.hover.y));
+      g.beginPath(); g.moveTo(padL, Math.round(hy) + 0.5); g.lineTo(padL + plotW, Math.round(hy) + 0.5); g.stroke();
+      g.restore();
+      // 커서 높이의 가격
+      const hv = lo + ((yBot - hy) / priceH) * (hi - lo);
+      g.fillStyle = "#243447";
+      if (g.roundRect) { g.beginPath(); g.roundRect(padL + plotW + 1, hy - 8, padR - 3, 16, 3); g.fill(); }
+      else g.fillRect(padL + plotW + 1, hy - 8, padR - 3, 16);
+      g.fillStyle = "#cfe0f5"; g.font = "600 9.5px -apple-system,system-ui,sans-serif";
+      g.textAlign = "left"; g.textBaseline = "middle";
+      g.fillText(nf.format(Math.round(hv)), padL + plotW + 4, hy + 0.5);
+    }
+
+    /* ── 요약 문구 */
+    const info = $("#chInfo");
+    if (info) {
+      info.textContent = `${CH_RANGE[cnt] || cnt + "봉"} · 최고 ${fmt(rows[hiI][2])} (${chartDate(rows[hiI][0]).short}) · 최저 ${fmt(rows[loI][3])} (${chartDate(rows[loI][0]).short})`;
+    }
+    syncChBtns();
+  }
+
+  function syncChBtns() {
+    const n = CH.view.n;
+    $$("#chRng button").forEach(b => b.classList.toggle("on", Number(b.dataset.rng) === n));
+    $$("#chLeg button").forEach(b => b.classList.toggle("on", !!CH.opts[b.dataset.ch]));
+  }
+
+  function chartZoom(f, xPx) {
+    const N = CH.rows.length;
+    if (!N) return;
+    const G = chartGeom();
+    const barW = G.plotW * (G.cnt / (G.cnt + G.FUT));
+    const frac = Math.max(0, Math.min(1, (xPx - G.padL) / Math.max(1, barW)));
+    const anchor = G.start + frac * G.cnt;
+    const n1 = Math.max(Math.min(20, N), Math.min(N, Math.round(G.n * f)));
+    let end1 = Math.round(anchor + (1 - frac) * n1);
+    end1 = Math.max(n1, Math.min(N, end1));
+    CH.view.n = n1; CH.view.end = end1;
+    CH.hover = null; hideTip();
+    chartDraw();
+  }
+
+  function chartReset() {
+    const N = CH.rows.length;
+    CH.view = { n: Math.min(250, Math.max(20, N)), end: N };
+    CH.hover = null; hideTip();
+    chartDraw();
+  }
+
+  function chartIndexAt(x) {
+    const G = chartGeom();
+    return Math.round((x - G.padL) / G.sw - 0.5) + G.start;
+  }
+
+  function showTip(i, x, y) {
+    const tip = CH.tip, r = CH.rows[i];
+    if (!tip || !r) return;
+    const prev = i > 0 ? CH.rows[i - 1][4] : null;
+    const chp = prev ? (r[4] / prev - 1) * 100 : null;
+    const dt = chartDate(r[0]);
+    tip.innerHTML = `<div class="td">${dt.full} <i>${dt.wd}</i></div>
+      <div class="tg">
+        <span>시가</span><b>${fmt(r[1])}</b>
+        <span>고가</span><b>${fmt(r[2])}</b>
+        <span>저가</span><b>${fmt(r[3])}</b>
+        <span>종가</span><b class="${cls(chp)}">${fmt(r[4])}</b>
+        <span>등락</span><b class="${cls(chp)}">${signedTxt(chp)}</b>
+        <span>거래량</span><b>${won(r[5])}</b>
+      </div>`;
+    tip.hidden = false;
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    const maxX = (CH.wrap ? CH.wrap.clientWidth : CH.cssW) - tw - 6;
+    let left = Math.max(6, Math.min(maxX, x - tw / 2));
+    let top = y - th - 14;
+    if (top < 4) top = Math.min(CH.cssH - th - 6, y + 16);
+    tip.style.left = Math.round(left) + "px";
+    tip.style.top = Math.round(top) + "px";
+  }
+
+  function hideTip() { if (CH.tip) CH.tip.hidden = true; }
+
+  function chartBind() {
+    const cv = CH.cv;
+    if (!cv || cv.dataset.bound) return;
+    cv.dataset.bound = "1";
+    cv.style.touchAction = "none";
+    const relX = e => e.clientX - cv.getBoundingClientRect().left;
+    const relY = e => e.clientY - cv.getBoundingClientRect().top;
+
+    cv.addEventListener("wheel", e => {
+      e.preventDefault();
+      chartZoom(e.deltaY < 0 ? 0.86 : 1.16, relX(e));
+    }, { passive: false });
+
+    cv.addEventListener("pointerdown", e => {
+      try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+      CH.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (CH.ptrs.size === 1) {
+        CH.drag = { x: e.clientX, end0: CH.view.end, moved: 0 };
+        CH.tap = { t: Date.now(), x: e.clientX, y: e.clientY };
+      } else if (CH.ptrs.size === 2) {
+        CH.drag = null;
+        const pts = [...CH.ptrs.values()];
+        const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+        const G = chartGeom();
+        const barW = G.plotW * (G.cnt / (G.cnt + G.FUT));
+        const mid = (pts[0].x + pts[1].x) / 2 - cv.getBoundingClientRect().left;
+        CH.pinch = {
+          d, n0: G.n, end0: G.end,
+          frac: Math.max(0, Math.min(1, (mid - G.padL) / Math.max(1, barW)))
+        };
+      }
     });
 
-    // volume
-    const vmax = Math.max(...rows.map(r => r[5] || 0)) || 1;
-    const vTop = padT + H + 10;
-    rows.forEach((r, i) => {
-      const up = r[4] >= r[1];
-      const h = ((r[5] || 0) / vmax) * (volH - 12);
-      g.fillStyle = up ? "rgba(246,70,93,.45)" : "rgba(59,130,246,.45)";
-      g.fillRect(X(i) - bw / 2, vTop + (volH - 12) - h, bw, h);
+    cv.addEventListener("pointermove", e => {
+      const p = CH.ptrs.get(e.pointerId);
+      if (!p) {
+        // 마우스 호버
+        const G = chartGeom();
+        const x = relX(e), y = relY(e);
+        if (x < G.padL || x > G.padL + G.plotW || y < 0 || y > CH.cssH) { CH.hover = null; hideTip(); chartDraw(); return; }
+        const i = chartIndexAt(x);
+        if (i < G.start || i >= G.end) { CH.hover = null; hideTip(); chartDraw(); return; }
+        CH.hover = { i, y };
+        showTip(i, x, y);
+        chartDraw();
+        return;
+      }
+      p.x = e.clientX; p.y = e.clientY;
+
+      if (CH.ptrs.size >= 2 && CH.pinch) {
+        const pts = [...CH.ptrs.values()].slice(0, 2);
+        const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+        const P = CH.pinch, N = CH.rows.length;
+        const anchor = (P.end0 - P.n0) + P.frac * P.n0;
+        let n1 = Math.round(P.n0 * P.d / d);
+        n1 = Math.max(Math.min(20, N), Math.min(N, n1));
+        let end1 = Math.round(anchor + (1 - P.frac) * n1);
+        end1 = Math.max(n1, Math.min(N, end1));
+        if (n1 !== CH.view.n || end1 !== CH.view.end) {
+          CH.view.n = n1; CH.view.end = end1;
+          CH.hover = null; hideTip(); chartDraw();
+        }
+        return;
+      }
+
+      if (CH.drag) {
+        const dx = e.clientX - CH.drag.x;
+        if (Math.abs(dx) > CH.drag.moved) CH.drag.moved = Math.abs(dx);
+        if (Math.abs(dx) > 3) {
+          const G = chartGeom();
+          const end = Math.max(G.n, Math.min(G.N, Math.round(CH.drag.end0 - dx / G.sw)));
+          if (end !== CH.view.end) {
+            CH.view.end = end;
+            CH.hover = null; hideTip(); chartDraw();
+          }
+        }
+      }
     });
 
-    // 날짜 눈금
-    g.fillStyle = "#4a5666"; g.font = "9px system-ui";
-    const dd = i => rows[i][0].slice(4, 6) + "/" + rows[i][0].slice(6, 8);
-    const ly = cssH - 3;
-    g.textAlign = "left"; g.fillText(dd(0), padL, ly);
-    g.textAlign = "center"; g.fillText(dd(Math.floor(rows.length / 2)), padL + W / 2, ly);
-    g.textAlign = "right"; g.fillText(dd(rows.length - 1), padL + W, ly);
+    const finish = e => {
+      const tapped = CH.tap && CH.drag && CH.drag.moved < 6 && Date.now() - CH.tap.t < 450;
+      CH.ptrs.delete(e.pointerId);
+      if (CH.ptrs.size < 2) CH.pinch = null;
+      if (CH.ptrs.size === 0) {
+        if (tapped) {
+          const now = Date.now();
+          if (now - CH.lastTap < 320) { CH.lastTap = 0; chartReset(); }
+          else {
+            CH.lastTap = now;
+            const G = chartGeom();
+            const x = relX(e), y = relY(e);
+            const i = chartIndexAt(x);
+            if (i >= G.start && i < G.end && x >= G.padL && x <= G.padL + G.plotW) {
+              CH.hover = { i, y: Math.max(G.padT, Math.min(G.padT + G.priceH, y)) };
+              showTip(i, x, y);
+              chartDraw();
+            }
+          }
+        }
+        CH.drag = null; CH.tap = null;
+      }
+    };
+    cv.addEventListener("pointerup", finish);
+    cv.addEventListener("pointercancel", e => {
+      CH.ptrs.delete(e.pointerId);
+      CH.pinch = null; CH.drag = null; CH.tap = null;
+    });
+    cv.addEventListener("pointerleave", () => {
+      if (!CH.ptrs.size) { CH.hover = null; hideTip(); chartDraw(); }
+    });
+  }
 
-    // last price tag
-    const lastY = Y(s.p || closes[closes.length - 1]);
-    g.fillStyle = "#4da3ff"; g.fillRect(padL + W + 1, lastY - 7, padR - 2, 14);
-    g.fillStyle = "#04121f"; g.font = "600 9.5px system-ui"; g.textAlign = "left";
-    g.fillText(nf.format(s.p || closes[closes.length - 1]), padL + W + 4, lastY + 3.4);
+  function bindChartUI() {
+    const bar = $("#chBar");
+    if (!bar || bar.dataset.bound) return;
+    bar.dataset.bound = "1";
+    bar.addEventListener("click", e => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      const N = CH.rows.length;
+      if (b.dataset.rng) {
+        const n = Math.min(N, Number(b.dataset.rng));
+        CH.view = { n: Math.max(Math.min(20, N), n), end: N };
+        CH.hover = null; hideTip(); chartDraw();
+      } else if (b.id === "chZi") chartZoom(0.72, CH.padL + (CH.cssW - CH.padL - CH.padR) / 2);
+      else if (b.id === "chZo") chartZoom(1.38, CH.padL + (CH.cssW - CH.padL - CH.padR) / 2);
+      else if (b.id === "chRs") chartReset();
+    });
+    const leg = $("#chLeg");
+    if (leg && !leg.dataset.bound) {
+      leg.dataset.bound = "1";
+      leg.addEventListener("click", e => {
+        const b = e.target.closest("button");
+        if (!b || !b.dataset.ch) return;
+        const k = b.dataset.ch;
+        CH.opts[k] = CH.opts[k] ? 0 : 1;
+        LS.set("krt.chart", CH.opts);
+        CH.hover = null; hideTip();
+        syncChBtns();
+        chartDraw();
+      });
+    }
   }
 
   /* ─────────────────────────── 필터 UI ─────────────────────────── */
@@ -957,10 +1426,9 @@
       }
     });
     window.addEventListener("resize", debounce(() => {
-      if (state.openCode && $("#chart")) {
-        const s = state.byCode.get(state.openCode);
-        const rows = state.hcache.get(state.openCode) || [];
-        if (s) drawChart($("#chart"), rows, s);
+      if (state.openCode && $("#chart") && CH.rows.length) {
+        chartResize();
+        chartDraw();
       }
     }, 200));
   }
