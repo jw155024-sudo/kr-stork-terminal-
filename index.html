@@ -7,7 +7,7 @@
 <title>KR Terminal — 국내주식 전종목</title>
 <meta name="robots" content="noindex,nofollow">
 <meta name="description" content="국내 주식 전 종목 시세·외국인 수급·연속 매수 필터·차트·물타기 계산기">
-<link rel="stylesheet" href="styles.css?v=20261125b">
+<link rel="stylesheet" href="styles.css?v=20261126c">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230b0e13'/><path d='M22 70 L42 46 L56 58 L78 28' stroke='%234da3ff' stroke-width='8' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 </head>
 <body>
@@ -27,9 +27,9 @@
 </header>
 
 <nav class="tabs" id="tabs">
-  <button class="tab active" data-tab="all">전 종목 <em id="cntAll">–</em></button>
-  <button class="tab" data-tab="foreign">외국인 순매수</button>
-  <button class="tab" data-tab="filter">연속 매수 × 연속 상승</button>
+  <button class="tab active" data-tab="all">종합 <em id="cntAll">–</em></button>
+  <button class="tab" data-tab="foreign">외국인 <em id="cntFor">–</em></button>
+  <button class="tab" data-tab="inst">기관 <em id="cntInst">–</em></button>
   <button class="tab" data-tab="rose">전일 상승 → 오늘 <em id="cntRose">–</em></button>
   <button class="tab" data-tab="mine">내 종목 <em id="cntMine">0</em></button>
 </nav>
@@ -49,21 +49,40 @@
     <button class="chip" data-r="5">+5%↑</button>
     <button class="chip" data-r="10">+10%↑</button>
   </div>
-  <div class="fgroup">
-    <span class="flabel">외국인 연속매수</span>
-    <button class="chip on" data-f="0">전체</button>
-    <button class="chip" data-f="2">2일+</button>
-    <button class="chip" data-f="3">3일+</button>
-    <button class="chip" data-f="5">5일+</button>
-    <button class="chip" data-f="7">7일+</button>
-    <button class="chip" data-f="10">10일+</button>
+  <div class="fgroup din">
+    <span class="flabel" title="외국인 연속 순매수 일수">외인 연속</span>
+    <button class="chip on" data-fp="0">전체</button>
+    <button class="chip" data-fp="3">3</button>
+    <button class="chip" data-fp="5">5</button>
+    <button class="chip" data-fp="10">10</button>
+    <span class="numwrap" id="wF"><input id="inF" type="number" min="0" max="99" inputmode="numeric" placeholder="0" aria-label="외국인 연속매수 일수 직접 입력"><i>일+</i></span>
+  </div>
+  <div class="fgroup din">
+    <span class="flabel" title="기관 연속 순매수 일수">기관 연속</span>
+    <button class="chip on" data-op="0">전체</button>
+    <button class="chip" data-op="3">3</button>
+    <button class="chip" data-op="5">5</button>
+    <button class="chip" data-op="10">10</button>
+    <span class="numwrap" id="wO"><input id="inO" type="number" min="0" max="99" inputmode="numeric" placeholder="0" aria-label="기관 연속매수 일수 직접 입력"><i>일+</i></span>
+  </div>
+  <div class="fgroup din">
+    <span class="flabel" title="주가 연속 상승 일수">연속 상승</span>
+    <button class="chip on" data-pp="0">전체</button>
+    <button class="chip" data-pp="2">2</button>
+    <button class="chip" data-pp="3">3</button>
+    <button class="chip" data-pp="5">5</button>
+    <span class="numwrap" id="wP"><input id="inP" type="number" min="0" max="99" inputmode="numeric" placeholder="0" aria-label="연속 상승 일수 직접 입력"><i>일+</i></span>
+  </div>
+  <div class="fgroup scroll">
+    <span class="flabel">차트</span>
+    <button class="chip on" data-ch="">전체</button>
+    <button class="chip" data-ch="b60">60일선 돌파</button>
+    <button class="chip" data-ch="b120">120일선 돌파</button>
+    <button class="chip" data-ch="a60">60일선 위</button>
+    <button class="chip" data-ch="a120">120일선 위</button>
   </div>
   <div class="fgroup">
-    <span class="flabel">연속 상승</span>
-    <button class="chip on" data-p="0">전체</button>
-    <button class="chip" data-p="2">2일+</button>
-    <button class="chip" data-p="3">3일+</button>
-    <button class="chip" data-p="5">5일+</button>
+    <button class="chip toggle" id="both" title="외국인과 기관이 같은 날 모두 순매수한 종목">외인+기관 쌍끌이</button>
   </div>
   <div class="fgroup fgroup-right">
     <button class="chip ghost" id="reset">필터 초기화</button>
@@ -80,22 +99,7 @@
 
   <div class="tablewrap">
     <table class="tbl" id="tbl">
-      <thead>
-        <tr>
-          <th class="c-name">종목</th>
-          <th class="c-num sortable" data-sort="p">현재가</th>
-          <th class="c-num sortable" data-sort="chp">등락률</th>
-          <th class="c-num sortable roseonly" data-sort="pchp" title="직전 거래일 등락률">전일</th>
-          <th class="c-num sortable roseonly" data-sort="c2d" title="전일 + 오늘 2거래일 누적 등락률">2일 누적</th>
-          <th class="c-num sortable" data-sort="fv" title="가장 최근 발표된 외국인 순매수 금액(추정)">외인 순매수</th>
-          <th class="c-num sortable" data-sort="fq">순매수 주수</th>
-          <th class="c-num sortable" data-sort="fc" title="연속 순매수 일수(음수는 연속 순매도)">외인 연속</th>
-          <th class="c-num sortable" data-sort="pc" title="연속 상승 일수(음수는 연속 하락)">연속 상승</th>
-          <th class="c-num sortable hide-sm" data-sort="va">거래대금</th>
-          <th class="c-ma hide-sm">MA</th>
-          <th class="c-num hide-sm sortable" data-sort="r20">20일</th>
-        </tr>
-      </thead>
+      <thead id="thead"></thead>
       <tbody id="tbody"></tbody>
     </table>
     <div class="empty" id="empty" hidden>조건에 맞는 종목이 없습니다.</div>
@@ -122,6 +126,6 @@
   </aside>
 </div>
 
-<script src="app.js?v=20261125f"></script>
+<script src="app.js?v=20261126c"></script>
 </body>
 </html>

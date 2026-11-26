@@ -17,9 +17,12 @@
     byCode: new Map(),
     tab: "all",
     market: "ALL",
-    fMin: 0,
-    pMin: 0,
-    rMin: 0,
+    fMin: 0,        // 외국인 연속 순매수 최소 일수 (0 = 전체)
+    oMin: 0,        // 기관 연속 순매수 최소 일수
+    pMin: 0,        // 주가 연속 상승 최소 일수
+    rMin: 0,        // 전일 상승률 최소 %
+    chart: "",      // "" | b60 | b120 | a60 | a120
+    both: false,    // 외인+기관 쌍끌이
     q: "",
     sort: { key: "va", dir: -1 },
     limit: 120,
@@ -55,6 +58,7 @@
     return (v > 0 ? "+" : "") + Number(v).toFixed(d) + suffix;
   }
   const cls = v => v === null || v === undefined || isNaN(v) ? "flat" : v > 0 ? "up" : v < 0 ? "down" : "flat";
+  const chAmt = s => s.ch != null ? (s.ch > 0 ? "+" : "") + nf.format(s.ch) : "–";
 
   /* ─────────────────────────── 로드 ─────────────────────────── */
   async function boot() {
@@ -66,15 +70,24 @@
       d.stocks.forEach(s => state.byCode.set(s.c, s));
       renderStrip();
       renderStamp();
+      updateCounts();
       renderTable();
-      $("#cntAll").textContent = nf.format(d.stocks.length);
-      $("#cntRose").textContent = nf.format(d.stocks.filter(s => s.pchp > 0).length);
-      $("#cntMine").textContent = state.watch.size;
       $("#srcline").insertAdjacentHTML("afterbegin", "");
     } catch (e) {
       $("#tinfo").innerHTML = '<span class="down">데이터를 불러오지 못했습니다 — ' + e.message + "</span>";
       $("#stamp").textContent = "오프라인";
     }
+  }
+
+  function updateCounts() {
+    const d = state.data;
+    if (!d) return;
+    const st = d.stocks;
+    $("#cntAll").textContent = nf.format(st.length);
+    $("#cntFor").textContent = nf.format(st.filter(s => s.fq > 0 || s.fv > 0).length);
+    $("#cntInst").textContent = nf.format(st.filter(s => s.oq > 0 || s.oc > 0).length);
+    $("#cntRose").textContent = nf.format(st.filter(s => s.pchp > 0).length);
+    $("#cntMine").textContent = state.watch.size;
   }
 
   function renderStamp() {
@@ -142,12 +155,21 @@
     let arr = data.stocks;
     if (state.market !== "ALL") arr = arr.filter(s => s.m === state.market);
     if (state.fMin) arr = arr.filter(s => s.fc >= state.fMin);
+    if (state.oMin) arr = arr.filter(s => s.oc >= state.oMin);
     if (state.pMin) arr = arr.filter(s => s.pc >= state.pMin);
+    if (state.both) arr = arr.filter(s => s.fq > 0 && s.oq > 0);
+    if (state.chart) {
+      const k = state.chart;
+      arr = arr.filter(s => s[k] === 1 || s[k] === true);
+    }
     if (q) {
       arr = arr.filter(s => s.n.toLowerCase().includes(q) || s.c.includes(q));
     }
     if (state.tab === "foreign") {
       arr = arr.filter(s => (s.fq > 0 || s.fv > 0));
+    }
+    if (state.tab === "inst") {
+      arr = arr.filter(s => (s.oq > 0 || s.oc > 0));
     }
     if (state.tab === "rose") {
       // 직전 거래일에 상승 마감한 종목만 (pchp: 전일 등락률)
@@ -159,7 +181,7 @@
     }
     const k = state.sort.key, dir = state.sort.dir;
     arr = arr.slice().sort((a, b) => {
-      const av = a[k], bv = b[k];
+      const av = valOf(a, k), bv = valOf(b, k);
       const an = av === null || av === undefined ? -Infinity : av;
       const bn = bv === null || bv === undefined ? -Infinity : bv;
       if (typeof an === "string") return dir * an.localeCompare(bn);
@@ -168,13 +190,82 @@
     return arr;
   }
 
-  const COLS = {
-    all: [["va", "거래대금"], ["mc", "시가총액"], ["chp", "등락률"], ["fv", "외인금액"]],
-    foreign: [["fv", "외인금액"], ["fq", "순매수주수"], ["fc", "연속일수"], ["va", "거래대금"]],
-    filter: [["fc", "외인연속"], ["pc", "상승연속"], ["fv", "외인금액"], ["chp", "등락률"]],
-    rose: [["chp", "오늘 등락률"], ["pchp", "전일 등락률"], ["c2d", "2일 누적"], ["fc", "외인연속"]],
-    mine: [["chp", "등락률"], ["fv", "외인금액"], ["r20", "20일 수익률"]]
+  function valOf(s, k) {
+    if (k === "pnl") {
+      const h = state.holdings[s.c];
+      return (h && h.q && h.a && s.p) ? (s.p / h.a - 1) * 100 : null;
+    }
+    return s[k];
+  }
+
+  /* 탭별 열 구성. h: 셀 렌더러, hideSm: 모바일 카드에서 숨김, sort:false → 정렬 불가 */
+  const cell = {
+    chp: s => `<span class="${cls(s.chp)}">${chAmt(s)} ${signedTxt(s.chp)}</span>`,
+    pchp: s => `<span class="${cls(s.pchp)}">${signedTxt(s.pchp)}</span>`,
+    c2d: s => `<span class="${cls(s.c2d)}">${signedTxt(s.c2d)}</span>`,
+    fv: s => `<span class="${cls(s.fv)}">${won(s.fv)}</span>`,
+    fq: s => `<span class="${cls(s.fq)}">${s.fq != null ? nf.format(s.fq) : "–"}</span>`,
+    fvc: s => `<span class="${cls(s.fvc)}">${won(s.fvc)}</span>`,
+    oq: s => `<span class="${cls(s.oq)}">${s.oq != null ? nf.format(s.oq) : "–"}</span>`,
+    oqc: s => `<span class="${cls(s.oq)}">${s.oq != null ? nf.format(s.oq) + "주" : "–"}</span>`,
+    va: s => won(s.va),
+    r20: s => `<span class="${cls(s.r20)}">${signedTxt(s.r20, 1)}</span>`,
+    ma: s => maBadges(s),
+    pnl: s => {
+      const h = state.holdings[s.c];
+      if (!h || !h.q || !h.a) return '<span class="flat">–</span>';
+      const pct = s.p ? (s.p / h.a - 1) * 100 : null;
+      return `<span class="${cls(pct)}">${signedTxt(pct, 2)}</span> <small style="color:#63708a;font-weight:400">${nf.format(h.q)}주</small>`;
+    }
   };
+
+  const COLS = {
+    all: [
+      { k: "chp", l: "등락률" },
+      { k: "fv", l: "외인 순매수", title: "가장 최근 발표된 외국인 순매수 금액(추정)" },
+      { k: "fq", l: "순매수 주수", hideSm: 1 },
+      { k: "va", l: "거래대금", hideSm: 1 },
+      { k: "ma", l: "MA", hideSm: 1, sort: false },
+      { k: "r20", l: "20일", hideSm: 1 }
+    ],
+    foreign: [
+      { k: "chp", l: "등락률" },
+      { k: "fv", l: "외인 순매수" },
+      { k: "fq", l: "순매수 주수", hideSm: 1 },
+      { k: "fvc", l: "누적 순매수", title: "연속 순매수 기간 누적 금액" },
+      { k: "va", l: "거래대금", hideSm: 1 }
+    ],
+    inst: [
+      { k: "chp", l: "등락률" },
+      { k: "oq", l: "기관 순매수량", title: "최근 발표일 기관 순매수 주수" },
+      { k: "fv", l: "외인 순매수", hideSm: 1 },
+      { k: "va", l: "거래대금", hideSm: 1 }
+    ],
+    rose: [
+      { k: "chp", l: "등락률" },
+      { k: "pchp", l: "전일", title: "직전 거래일 등락률" },
+      { k: "c2d", l: "2일 누적", title: "전일 + 오늘 2거래일 누적 등락률" },
+      { k: "fv", l: "외인 순매수", hideSm: 1 },
+      { k: "va", l: "거래대금", hideSm: 1 }
+    ],
+    mine: [
+      { k: "chp", l: "등락률" },
+      { k: "pnl", l: "평가손익", title: "저장한 보유 수량·평단 기준" },
+      { k: "r20", l: "20일" },
+      { k: "fv", l: "외인 순매수", hideSm: 1 },
+      { k: "va", l: "거래대금", hideSm: 1 }
+    ]
+  };
+
+  const QUICK = {
+    all: [["va", "거래대금"], ["chp", "등락률"], ["fv", "외인금액"], ["fc", "외인연속"], ["pc", "상승연속"]],
+    foreign: [["fv", "외인금액"], ["fvc", "누적금액"], ["fq", "주수"], ["fc", "외인연속"], ["va", "거래대금"]],
+    inst: [["oq", "기관주수"], ["oc", "기관연속"], ["fv", "외인금액"], ["va", "거래대금"]],
+    rose: [["chp", "오늘"], ["pchp", "전일"], ["c2d", "2일누적"], ["fc", "외인연속"], ["pc", "상승연속"]],
+    mine: [["chp", "등락률"], ["pnl", "평가손익"], ["r20", "20일"], ["fc", "외인연속"]]
+  };
+
+  const CHART_LABEL = { b60: "60일선 돌파", b120: "120일선 돌파", a60: "60일선 위", a120: "120일선 위" };
 
   function maBadges(s) {
     const b = (label, key) => {
@@ -183,62 +274,85 @@
       const ok = s.p >= v;
       return `<i class="${ok ? "y" : "x"}" title="${label}일선 ${fmt(v)} · ${ok ? "위" : "아래"}">${label}</i>`;
     };
-    return `<div class="mas">${b("5", "ma5")}${b("20", "ma20")}${b("60", "ma60")}${b("200", "ma200")}</div>`;
+    return `<div class="mas">${b("5", "ma5")}${b("20", "ma20")}${b("60", "ma60")}${b("120", "ma120")}${b("200", "ma200")}</div>`;
+  }
+
+  /* 종목명 아래 배지: 외인/기관 연속, 연속 상승, 이평선 돌파 */
+  function badges(s) {
+    const out = [];
+    const fcAmt = (state.tab === "foreign" && s.fvc) ? ` · ${won(s.fvc)}` : "";
+    if (s.fc) {
+      const t = `외국인 ${Math.abs(s.fc)}일 연속 ${s.fc > 0 ? "순매수" : "순매도"}` + (s.fvc ? ` · 누적 ${won(s.fvc)}` : "");
+      out.push(`<span class="pill ${s.fc > 0 ? "f" : "o"}" title="${t}">외인 ${Math.abs(s.fc)}일${s.fc > 0 ? "↑" : "↓"}${fcAmt}</span>`);
+    }
+    if (s.oc) {
+      out.push(`<span class="pill ${s.oc > 0 ? "f" : "o"}" title="기관 ${Math.abs(s.oc)}일 연속 ${s.oc > 0 ? "순매수" : "순매도"}">기관 ${Math.abs(s.oc)}일${s.oc > 0 ? "↑" : "↓"}</span>`);
+    }
+    if (s.pc && Math.abs(s.pc) >= 2) {
+      out.push(`<span class="pill s-strong" title="${Math.abs(s.pc)}일 연속 ${s.pc > 0 ? "상승" : "하락"}">${Math.abs(s.pc)}일 ${s.pc > 0 ? "상승" : "하락"}</span>`);
+    }
+    if (s.b60) out.push('<span class="mb brk" title="전일 60일선 아래 → 오늘 60일선 돌파">60일↑</span>');
+    if (s.b120) out.push('<span class="mb brk" title="전일 120일선 아래 → 오늘 120일선 돌파">120일↑</span>');
+    if (!s.b60 && s.a60) out.push('<span class="mb above" title="현재가 60일선 위">60일위</span>');
+    if (!s.b120 && s.a120) out.push('<span class="mb above" title="현재가 120일선 위">120일위</span>');
+    return out.length ? out.join("") : '<span class="pill n">–</span>';
   }
 
   function rowHtml(s) {
-    const c = cls(s.chp);
-    const fc = s.fc;
-    const fcAmt = (state.tab === "foreign" && s.fvc) ? ` · ${won(s.fvc)}` : "";
-    const fcPill = fc ? `<span class="pill ${fc > 0 ? "f" : "o"}">외인 ${fc > 0 ? fc + "일↑" : Math.abs(fc) + "일↓"}${fcAmt}</span>`
-      : '<span class="pill n">–</span>';
-    const pc = s.pc;
-    const pcPill = pc ? `<span class="pill ${pc > 0 ? "f" : "o"}">${pc > 0 ? pc + "일↑" : Math.abs(pc) + "일↓"}</span>`
-      : '<span class="pill n">–</span>';
+    const cols = COLS[state.tab] || COLS.all;
     const star = state.watch.has(s.c) ? '<span style="color:#f5c451">★</span>' : "";
-    const chAmt = s.ch != null ? (s.ch > 0 ? "+" : "") + nf.format(s.ch) : "–";
+    const cells = cols.map(c => {
+      const h = c.h || cell[c.k] || (x => "–");
+      return `<td data-k="${c.k}" class="${c.hideSm ? "hide-sm " : ""}mono">${h(s)}</td>`;
+    }).join("");
     return `<tr data-code="${s.c}">
-      <td class="c-name"><div class="nm">${star}${s.n}<span class="code">${s.c}</span><span class="mkt ${s.m}">${s.m === "K" ? "코스피" : "코스닥"}</span></div></td>
-      <td data-k="p" class="mono">${fmt(s.p)}</td>
-      <td data-k="chp" class="${c} mono">${chAmt} ${signedTxt(s.chp)}</td>
-      <td data-k="pchp" class="roseonly ${cls(s.pchp)} mono">${signedTxt(s.pchp)}</td>
-      <td data-k="c2d" class="roseonly ${cls(s.c2d)} mono">${signedTxt(s.c2d)}</td>
-      <td data-k="fv" class="${cls(s.fv)} mono">${won(s.fv)}</td>
-      <td data-k="fq" class="${cls(s.fq)} mono">${s.fq ? nf.format(s.fq) : "–"}</td>
-      <td data-k="fc">${fcPill}</td>
-      <td data-k="pc">${pcPill}</td>
-      <td data-k="va" class="hide-sm mono">${won(s.va)}</td>
-      <td data-k="ma" class="hide-sm">${maBadges(s)}</td>
-      <td data-k="r20" class="hide-sm ${cls(s.r20)} mono">${signedTxt(s.r20, 1)}</td>
+      <td class="c-name">
+        <div class="nm">${star}${s.n}<span class="code">${s.c}</span><span class="mkt ${s.m}">${s.m === "K" ? "코스피" : "코스닥"}</span></div>
+        <div class="badges">${badges(s)}</div>
+      </td>
+      <td data-k="p" class="pcell ${cls(s.chp)}">${fmt(s.p)}</td>
+      ${cells}
     </tr>`;
+  }
+
+  function renderHead() {
+    const cols = COLS[state.tab] || COLS.all;
+    $("#thead").innerHTML = `<tr><th class="c-name">종목</th>
+      <th class="c-num sortable" data-sort="p">현재가</th>` +
+      cols.map(c => `<th class="c-num${c.sort === false ? "" : " sortable"}${c.hideSm ? " hide-sm" : ""}" data-sort="${c.k}"${c.title ? ` title="${c.title}"` : ""}>${c.l}</th>`).join("") +
+      `</tr>`;
   }
 
   function renderTable() {
     const arr = filtered();
     const shown = arr.slice(0, state.limit);
+    renderHead();
     $("#tbody").innerHTML = shown.map(rowHtml).join("");
     $("#empty").hidden = arr.length !== 0;
     $("#more").hidden = arr.length <= state.limit;
     if (arr.length > state.limit) $("#more").textContent = `더 보기 (${nf.format(arr.length - state.limit)}개 남음)`;
 
     const base = {
-      all: "전 종목", foreign: "외국인 순매수 상위", filter: "조건 교집합",
+      all: "종합", foreign: "외국인 순매수 상위", inst: "기관 순매수 상위",
       rose: "전일 상승 → 오늘", mine: "내 종목"
     }[state.tab];
     const bits = [];
     if (state.market !== "ALL") bits.push(state.market === "K" ? "코스피" : "코스닥");
     if (state.rMin && state.tab === "rose") bits.push(`전일 +${state.rMin}%↑`);
     if (state.fMin) bits.push(`외인 ${state.fMin}일+`);
+    if (state.oMin) bits.push(`기관 ${state.oMin}일+`);
     if (state.pMin) bits.push(`${state.pMin}일+ 상승`);
+    if (state.both) bits.push("쌍끌이");
+    if (state.chart) bits.push(CHART_LABEL[state.chart]);
     if (state.q) bits.push(`"${state.q}"`);
     $("#tinfo").innerHTML = `<b>${nf.format(arr.length)}</b>종목 · ${base}${bits.length ? " · " + bits.join(" · ") : ""}` +
       (state.data && state.data.flowDate ? ` <span style="color:#63708a">(외인수급 ${state.data.flowDate.slice(4, 6)}/${state.data.flowDate.slice(6, 8)})</span>` : "");
 
-    const cols = COLS[state.tab] || COLS.all;
+    const cols = QUICK[state.tab] || QUICK.all;
     $("#tsort").innerHTML = cols.map(([k, l]) =>
       `<button data-quick="${k}" class="${state.sort.key === k ? "on" : ""}">${l}</button>`).join("");
 
-    $$("#tbl thead th").forEach(th => {
+    $$("#thead th").forEach(th => {
       th.classList.toggle("sorted", th.dataset.sort === state.sort.key);
       th.classList.toggle("asc", th.dataset.sort === state.sort.key && state.sort.dir === 1);
     });
@@ -306,7 +420,7 @@
   }
 
   function renderDetail(s, rows) {
-    const maLine = [["ma5", "5일"], ["ma20", "20일"], ["ma60", "60일"], ["ma200", "200일"]]
+    const maLine = [["ma5", "5일"], ["ma20", "20일"], ["ma60", "60일"], ["ma120", "120일"], ["ma200", "200일"]]
       .map(([k, l]) => {
         const v = s[k];
         const st = v == null ? '<span class="flat">–</span>'
@@ -338,8 +452,11 @@
     const fd = s.fd ? `${s.fd.slice(4, 6)}/${s.fd.slice(6, 8)}` : "–";
     const consec = [];
     if (s.fc) consec.push(`<span class="pill ${s.fc > 0 ? "f" : "o"}">외국인 ${Math.abs(s.fc)}일 연속 ${s.fc > 0 ? "순매수" : "순매도"}</span>`);
-    if (s.pc) consec.push(`<span class="pill ${s.pc > 0 ? "f" : "o"}">${Math.abs(s.pc)}일 연속 ${s.pc > 0 ? "상승" : "하락"}</span>`);
+    if (s.oc) consec.push(`<span class="pill ${s.oc > 0 ? "f" : "o"}">기관 ${Math.abs(s.oc)}일 연속 ${s.oc > 0 ? "순매수" : "순매도"}</span>`);
+    if (s.pc) consec.push(`<span class="pill s-strong">${Math.abs(s.pc)}일 연속 ${s.pc > 0 ? "상승" : "하락"}</span>`);
     if (s.fqc) consec.push(`<span class="pill n">누적 ${nf.format(s.fqc)}주 ${s.fvc ? "· " + won(s.fvc) : ""}</span>`);
+    if (s.b60) consec.push('<span class="mb brk">60일선 돌파</span>');
+    if (s.b120) consec.push('<span class="mb brk">120일선 돌파</span>');
 
     const hist = rows.slice(-16).reverse();
     const hrows = hist.map(r => {
@@ -434,7 +551,7 @@
     $("#watchBtn").addEventListener("click", () => {
       if (state.watch.has(s.c)) state.watch.delete(s.c); else state.watch.add(s.c);
       LS.set("krt.watch", [...state.watch]);
-      $("#cntMine").textContent = state.watch.size;
+      updateCounts();
       openDetail(s.c);
     });
   }
@@ -519,7 +636,7 @@
       LS.set("krt.hold", state.holdings);
       state.watch.add(s.c);
       LS.set("krt.watch", [...state.watch]);
-      $("#cntMine").textContent = state.watch.size;
+      updateCounts();
       $("#cSave").textContent = "저장됨";
       setTimeout(() => { const b = $("#cSave"); if (b) b.textContent = "보유 저장"; }, 1400);
     });
@@ -623,6 +740,51 @@
     g.fillText(nf.format(s.p || closes[closes.length - 1]), padL + W + 4, lastY + 3.4);
   }
 
+  /* ─────────────────────────── 필터 UI ─────────────────────────── */
+  const DAY_MAX = 99;
+
+  function syncFilters() {
+    $$("#filters .chip[data-market]").forEach(c => c.classList.toggle("on", c.dataset.market === state.market));
+    $$("#filters .chip[data-r]").forEach(c => c.classList.toggle("on", Number(c.dataset.r) === state.rMin));
+    $$("#filters .chip[data-ch]").forEach(c => c.classList.toggle("on", (c.dataset.ch || "") === state.chart));
+    $("#both").classList.toggle("on", state.both);
+    const groups = [["fp", "fMin", "#inF", "#wF"], ["op", "oMin", "#inO", "#wO"], ["pp", "pMin", "#inP", "#wP"]];
+    groups.forEach(([attr, key, inSel, wrapSel]) => {
+      const v = state[key];
+      $$(`#filters .chip[data-${attr}]`).forEach(c => c.classList.toggle("on", Number(c.dataset[attr]) === v));
+      const el = $(inSel);
+      if (el && el.value !== "" && Number(el.value) !== v) el.value = v || "";
+      if (el && v && el.value === "") el.value = v;
+      $(wrapSel).classList.toggle("on", v > 0);
+    });
+  }
+
+  function setDays(key, v) {
+    v = Math.max(0, Math.min(DAY_MAX, Number(v) || 0));
+    state[key] = v;
+    state.limit = 120;
+    syncFilters();
+    renderTable();
+  }
+
+  function bindDays(inSel, key) {
+    const el = $(inSel);
+    if (!el) return;
+    const commit = () => setDays(key, el.value);
+    el.addEventListener("input", debounce(commit, 220));
+    el.addEventListener("change", commit);
+    el.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); commit(); el.blur(); } });
+  }
+
+  function resetFilters() {
+    state.market = "ALL"; state.fMin = 0; state.oMin = 0; state.pMin = 0; state.rMin = 0;
+    state.chart = ""; state.both = false; state.q = ""; state.limit = 120;
+    $("#q").value = ""; $("#qclear").classList.remove("show");
+    ["#inF", "#inO", "#inP"].forEach(s => { const el = $(s); if (el) el.value = ""; });
+    syncFilters();
+    renderTable();
+  }
+
   /* ─────────────────────────── 이벤트 ─────────────────────────── */
   function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 
@@ -632,12 +794,11 @@
       $$(".tab").forEach(x => x.classList.toggle("active", x === b));
       state.tab = b.dataset.tab;
       state.limit = 120;
-      const defaults = { all: ["va", -1], foreign: ["fv", -1], filter: ["fc", -1], rose: ["chp", -1], mine: ["pnl", -1] };
+      const defaults = { all: ["va", -1], foreign: ["fv", -1], inst: ["oq", -1], rose: ["chp", -1], mine: ["chp", -1] };
       const [k, d] = defaults[state.tab] || ["va", -1];
       state.sort = { key: k, dir: d };
       document.body.classList.toggle("rose", state.tab === "rose");
-      if (state.tab === "mine" && state.sort.key === "pnl") state.sort = { key: "chp", dir: -1 };
-      if (state.tab === "mine") state.sort = { key: "chp", dir: -1 };
+      setTabClass();
       renderTable();
     });
 
@@ -645,31 +806,32 @@
       const c = e.target.closest(".chip");
       if (c && c.dataset.market) {
         state.market = c.dataset.market;
-        $$("#filters .chip[data-market]").forEach(x => x.classList.toggle("on", x === c));
-      } else if (c && c.dataset.f !== undefined) {
-        state.fMin = Number(c.dataset.f);
-        $$("#filters .chip[data-f]").forEach(x => x.classList.toggle("on", x === c));
-      } else if (c && c.dataset.p !== undefined) {
-        state.pMin = Number(c.dataset.p);
-        $$("#filters .chip[data-p]").forEach(x => x.classList.toggle("on", x === c));
       } else if (c && c.dataset.r !== undefined) {
         state.rMin = Number(c.dataset.r);
-        $$("#filters .chip[data-r]").forEach(x => x.classList.toggle("on", x === c));
+      } else if (c && c.dataset.fp !== undefined) {
+        state.fMin = Number(c.dataset.fp);
+        $("#inF").value = state.fMin || "";
+      } else if (c && c.dataset.op !== undefined) {
+        state.oMin = Number(c.dataset.op);
+        $("#inO").value = state.oMin || "";
+      } else if (c && c.dataset.pp !== undefined) {
+        state.pMin = Number(c.dataset.pp);
+        $("#inP").value = state.pMin || "";
+      } else if (c && c.dataset.ch !== undefined) {
+        state.chart = c.dataset.ch;
+      } else if (c && c.id === "both") {
+        state.both = !state.both;
       }
-      state.limit = 120; renderTable();
-    });
-
-    $("#reset").addEventListener("click", () => {
-      state.market = "ALL"; state.fMin = 0; state.pMin = 0; state.rMin = 0; state.q = ""; state.limit = 120;
-      $("#q").value = ""; $("#qclear").classList.remove("show");
-      $$("#filters .chip").forEach(c => {
-        if (c.dataset.market) c.classList.toggle("on", c.dataset.market === "ALL");
-        if (c.dataset.f !== undefined) c.classList.toggle("on", c.dataset.f === "0");
-        if (c.dataset.p !== undefined) c.classList.toggle("on", c.dataset.p === "0");
-        if (c.dataset.r !== undefined) c.classList.toggle("on", c.dataset.r === "0");
-      });
+      state.limit = 120;
+      syncFilters();
       renderTable();
     });
+
+    bindDays("#inF", "fMin");
+    bindDays("#inO", "oMin");
+    bindDays("#inP", "pMin");
+
+    $("#reset").addEventListener("click", resetFilters);
 
     $("#q").addEventListener("input", debounce(e => {
       state.q = e.target.value;
@@ -704,7 +866,9 @@
     $("#scrim").addEventListener("click", closeDetail);
     document.addEventListener("keydown", e => {
       if (e.key === "Escape") closeDetail();
-      if (e.key === "/" && document.activeElement !== $("#q")) { e.preventDefault(); $("#q").focus(); }
+      if (e.key === "/" && document.activeElement !== $("#q") && !/^INPUT|TEXTAREA$/.test((document.activeElement || {}).tagName || "")) {
+        e.preventDefault(); $("#q").focus();
+      }
     });
     window.addEventListener("resize", debounce(() => {
       if (state.openCode && $("#chart")) {
@@ -715,6 +879,12 @@
     }, 200));
   }
 
+  function setTabClass() {
+    document.body.className = document.body.className
+      .split(/\s+/).filter(c => c && !/^t-/.test(c)).join(" ");
+    document.body.classList.add("t-" + state.tab);
+  }
+
   function closeDetail() {
     $("#drawer").hidden = true;
     document.body.style.overflow = "";
@@ -723,5 +893,7 @@
   }
 
   bind();
+  syncFilters();
+  setTabClass();
   boot();
 })();

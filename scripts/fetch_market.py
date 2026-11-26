@@ -335,9 +335,26 @@ def build_stock(row: dict, hist: list[list], trend: list[dict]) -> dict:
                 acc += t["fp"] * t["close"]
         fcum_val = acc or None
 
-    prev_close = None
-    if len(hist) >= 2:
-        prev_close = closes[-2] if len(closes) >= 2 else None
+    # --- 이동평균선(60·120)과 '전일 대비 오늘 돌파' 판정
+    #     오늘 봉이 아직 없으면(장 시작 전·휴장) 마지막 확정 종가 기준으로 계산한다.
+    has_today = bool(row.get("price")) and bool(hist) and hist[-1][0] == today
+    prev_series = closes[:-1] if has_today else closes
+    prev_close = prev_series[-1] if prev_series else None
+    ma60_v = ma(closes, 60)
+    ma120_v = ma(closes, 120)
+    pma60 = ma(prev_series, 60)
+    pma120 = ma(prev_series, 120)
+    px = row.get("price")
+    b60 = b120 = a60 = a120 = None
+    if px is not None:
+        if ma60_v is not None:
+            a60 = 1 if px > ma60_v else 0
+            if prev_close is not None and pma60 is not None:
+                b60 = 1 if (prev_close <= pma60 and px > ma60_v) else 0
+        if ma120_v is not None:
+            a120 = 1 if px > ma120_v else 0
+            if prev_close is not None and pma120 is not None:
+                b120 = 1 if (prev_close <= pma120 and px > ma120_v) else 0
 
     # --- 전일 등락률(직전 거래일 종가 / 전전일 종가) 과 2거래일 누적 등락률
     #     '오늘 등락률(chp)'은 시세 스냅샷 기준이므로, 누적은 두 일간 등락률을 복리로 합성한다.
@@ -372,13 +389,19 @@ def build_stock(row: dict, hist: list[list], trend: list[dict]) -> dict:
         "c2d": c2d,
         "ma5": ma(closes, 5),
         "ma20": ma(closes, 20),
-        "ma60": ma(closes, 60),
+        "ma60": ma60_v,
+        "ma120": ma120_v,
         "ma200": ma(closes, 200),
         "hi52": round(max(closes[-250:]), 2) if closes[-250:] else None,
         "lo52": round(min(closes[-250:]), 2) if closes[-250:] else None,
         "fd": flow_date,
         "fr": trend[-1].get("fratio") if trend else None,
     }
+    # 이평선 돌파/위 여부 (b60·b120: 오늘 신규 돌파, a60·a120: 현재가가 선 위)
+    for _k, _v in (("b60", b60), ("b120", b120), ("a60", a60), ("a120", a120)):
+        if _v is not None:
+            st[_k] = _v
+
     # 지수 대비 20일 수익률 (차트용 아님, 목록 정렬용)
     if len(closes) >= 21 and closes[-21]:
         st["r20"] = round((closes[-1] / closes[-21] - 1) * 100, 2)
