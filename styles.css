@@ -295,10 +295,12 @@ textarea:focus{border-color:var(--acc)}
   .tbl td[data-k="fvc"]::before{content:"누적 ";color:var(--tx3);font-size:10.5px;font-weight:500}
   .tbl td[data-k="c2d"]::before{content:"2일 누적 ";color:var(--tx3);font-size:10.5px;font-weight:500}
   .tbl td[data-k="r20"]{grid-area:3/2/4/3;text-align:right;font-size:11.5px;margin-top:2px}
+  .tbl td[data-k="r20"]::before{content:"20일 ";color:var(--tx3);font-size:10.5px;font-weight:500}
   .tbl td[data-k="fq"],.tbl td[data-k="va"],.tbl td[data-k="ma"]{display:none}
   .badges{margin-top:4px;gap:3px}
   .badges .mb.above{display:inline-flex}
   .fgroup.scroll{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;max-width:100%;padding-bottom:1px}
+  .fgroup.scroll .chip{flex:0 0 auto;white-space:nowrap}
   .fgroup.scroll::-webkit-scrollbar{display:none}
   .din .numwrap{padding-right:5px}
   .din input{width:34px}
