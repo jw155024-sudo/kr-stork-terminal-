@@ -14,7 +14,8 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="phone"><iframe id="fr" src="index.html" title="모바일 미리보기"></iframe></div>
+  <div class="phone"><iframe id="fr" title="모바일 미리보기"></iframe></div>
 </div>
+<script>document.getElementById('fr').src = 'index.html?ts=' + Date.now();</script>
 </body>
 </html>
