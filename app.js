@@ -802,7 +802,7 @@
     const s = String(v).padStart(6, "0");
     const yy = 2000 + Number(s.slice(0, 2)), mm = Number(s.slice(2, 4)), dd = Number(s.slice(4, 6));
     const wd = "일월화수목금토"[new Date(yy, mm - 1, dd).getDay()];
-    return { full: `${yy}.${s.slice(2, 4)}.${s.slice(4, 6)}`, short: `${s.slice(2, 4)}/${s.slice(4, 6)}`, wd };
+    return { full: `${yy}.${s.slice(2, 4)}.${s.slice(4, 6)}`, short: `${s.slice(2, 4)}/${s.slice(4, 6)}`, ymd: `${s.slice(0, 2)}/${s.slice(2, 4)}/${s.slice(4, 6)}`, wd };
   }
 
   function chartIndicators(rows) {
@@ -951,16 +951,16 @@
     }
 
     /* ── 캔들 */
-    const bw = Math.max(1, Math.min(11, sw * 0.66));
+    const bw = Math.max(1, Math.min(11, Math.round(sw * 0.72)));
     for (let i = start; i < end; i++) {
       const r = rows[i], up = r[4] >= r[1];
-      const x = Math.round(X(i)) + 0.5;
+      const xc = Math.round(X(i));
+      const x = xc + 0.5;
       g.strokeStyle = g.fillStyle = up ? CHC.up : CHC.down;
       g.lineWidth = 1;
       g.beginPath(); g.moveTo(x, Y(r[2])); g.lineTo(x, Y(r[3])); g.stroke();
-      const y1 = Y(Math.max(r[1], r[4])), y2 = Y(Math.min(r[1], r[4]));
-      if (bw > 1.8) g.fillRect(x - bw / 2, y1, bw, Math.max(1, y2 - y1));
-      else g.fillRect(x - 0.5, y1, 1, Math.max(1, y2 - y1));
+      const y1 = Math.round(Y(Math.max(r[1], r[4]))), y2 = Math.round(Y(Math.min(r[1], r[4])));
+      g.fillRect(xc - Math.floor(bw / 2), y1, bw, Math.max(1, y2 - y1));
     }
 
     /* ── 선 그리기 헬퍼 */
@@ -998,15 +998,17 @@
     vmax = vmax || 1;
     const vh = volH - 8;
     for (let i = start; i < end; i++) {
-      const r = rows[i], up = r[4] >= r[1];
+      const r = rows[i];
+      // 거래량 색은 전일 종가 대비(상승 빨강 / 하락 파랑)
+      const up = i > 0 ? r[4] >= rows[i - 1][4] : r[4] >= r[1];
       const h2 = (r[5] / vmax) * vh;
-      g.fillStyle = up ? "rgba(246,70,93,.55)" : "rgba(59,130,246,.55)";
-      g.fillRect(X(i) - Math.max(1, bw) / 2, vTop + vh - h2, Math.max(1, bw), Math.max(1, h2));
+      g.fillStyle = up ? "rgba(246,70,93,.62)" : "rgba(59,130,246,.62)";
+      g.fillRect(Math.round(X(i)) - Math.floor(bw / 2), Math.round(vTop + vh - h2), bw, Math.max(1, Math.round(h2)));
     }
     g.strokeStyle = CHC.grid;
     g.beginPath(); g.moveTo(padL, Math.round(vTop + vh) + 0.5); g.lineTo(padL + plotW, Math.round(vTop + vh) + 0.5); g.stroke();
     g.fillStyle = CHC.axis; g.textAlign = "left"; g.textBaseline = "middle";
-    g.fillText(won(vmax), padL + plotW + 6, vTop + 5);
+    g.fillText(won(vmax), padL + plotW + 6, vTop + 14);
 
     /* ── 날짜 눈금 */
     const tickN = plotW < 380 ? 3 : 5;
@@ -1017,7 +1019,9 @@
       g.strokeStyle = "rgba(33,43,56,.75)";
       g.beginPath(); g.moveTo(x, yTop); g.lineTo(x, yBot); g.stroke();
       g.fillStyle = CHC.axis;
-      g.fillText(chartDate(rows[i][0]).short, Math.min(x, padL + plotW), H - padB + 4);
+      const lbl = chartDate(rows[i][0]).short;
+      const tw = g.measureText(lbl).width / 2;
+      g.fillText(lbl, Math.max(padL + tw, Math.min(x, padL + plotW - tw)), H - padB + 4);
     }
 
     /* ── 표시 구간 최고·최저 라벨 */
@@ -1078,7 +1082,7 @@
     /* ── 요약 문구 */
     const info = $("#chInfo");
     if (info) {
-      info.textContent = `${CH_RANGE[cnt] || cnt + "봉"} · 최고 ${fmt(rows[hiI][2])} (${chartDate(rows[hiI][0]).short}) · 최저 ${fmt(rows[loI][3])} (${chartDate(rows[loI][0]).short})`;
+      info.textContent = `${CH_RANGE[cnt] || cnt + "봉"} · 최고 ${fmt(rows[hiI][2])} (${chartDate(rows[hiI][0]).ymd}) · 최저 ${fmt(rows[loI][3])} (${chartDate(rows[loI][0]).ymd})`;
     }
     syncChBtns();
   }
