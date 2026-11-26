@@ -264,6 +264,8 @@ canvas{width:100%;display:block;border-radius:10px;background:#0d131b;border:1px
 .chbar button.on{background:#1d3350;border-color:#39628f;color:#cfe6ff}
 .chwrap{position:relative}
 canvas#chart{cursor:crosshair;touch-action:none}
+canvas#chart:focus{outline:none}
+canvas#chart:focus-visible{outline:1px solid #39628f;outline-offset:1px}
 .chleg{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}
 .chleg button{
   display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line2);background:#0f151d;

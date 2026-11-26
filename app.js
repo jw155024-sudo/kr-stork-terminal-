@@ -1152,8 +1152,27 @@
     if (!cv || cv.dataset.bound) return;
     cv.dataset.bound = "1";
     cv.style.touchAction = "none";
+    if (!cv.hasAttribute("tabindex")) cv.setAttribute("tabindex", "0");
     const relX = e => e.clientX - cv.getBoundingClientRect().left;
     const relY = e => e.clientY - cv.getBoundingClientRect().top;
+
+    // 키보드: ←→ 이동, +/- 확대축소, Home 1년 보기
+    cv.addEventListener("keydown", e => {
+      const N = CH.rows.length;
+      if (!N) return;
+      const G = chartGeom();
+      const step = Math.max(1, Math.round(G.cnt * (e.shiftKey ? 0.5 : 0.1)));
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        CH.view.end = Math.max(G.n, Math.min(N, CH.view.end + (e.key === "ArrowRight" ? step : -step)));
+        CH.hover = null; hideTip(); chartDraw();
+      } else if (e.key === "+" || e.key === "=" || e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        chartZoom((e.key === "+" || e.key === "=") ? 0.8 : 1.25, G.padL + G.plotW / 2);
+      } else if (e.key === "Home") {
+        e.preventDefault(); chartReset();
+      }
+    });
 
     cv.addEventListener("wheel", e => {
       e.preventDefault();
