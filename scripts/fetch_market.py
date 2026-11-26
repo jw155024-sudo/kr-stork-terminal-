@@ -6,7 +6,7 @@
 수집 소스
   * m.stock.naver.com/api/stocks/marketValue/{KOSPI|KOSDAQ} : 전 종목 시세/시총 스냅샷
   * m.stock.naver.com/api/stock/{code}/trend             : 일별 외국인/기관/개인 순매수 (최근 60거래일)
-  * m.stock.naver.com/api/stock/{code}/integration       : PER/PBR/EPS/BPS 등 투자지표 (PBR용)
+  * m.stock.naver.com/api/stock/{code}/integration       : PER/PBR/EPS/BPS 등 투자지표 (PER·PBR용)
   * api.finance.naver.com/siseJson.naver                 : 일별 OHLCV + 외국인소진율 (최근 약 1년)
   * m.stock.naver.com/api/index/{KOSPI|KOSDAQ}/integration : 지수 + 투자자별 수급 + 상승/하락 종목수
   * query1.finance.yahoo.com/v8/finance/chart            : 환율/나스닥선물/SOX/SOXX·SOXL·SOXS
@@ -42,7 +42,7 @@ UA_DESKTOP = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
 WORKERS = int(os.environ.get("FETCH_WORKERS", "20"))
-PBR_WORKERS = int(os.environ.get("PBR_WORKERS", "24"))   # PBR 수집 전용 병렬도
+VAL_WORKERS = int(os.environ.get("VAL_WORKERS", os.environ.get("PBR_WORKERS", "24")))  # PER·PBR 수집 병렬도
 HIST_DAYS = 60          # 상세 화면(수급 표)용 일별 데이터 보관 거래일 수
 CHART_DAYS = 380        # 차트용 일봉 보관 거래일 수 (약 1년 6개월 · 1년 보기 + 120일선·일목균형표 선행 계산분)
 CHART_LOOKBACK = 640    # 차트용 일봉을 받아올 과거 달력 일수 (약 430거래일)
@@ -292,28 +292,32 @@ def fetch_hist(code: str, start: str, end: str) -> list[list]:
     return out
 
 
-def fetch_pbr(code: str) -> float | None:
-    """PBR(배). 네이버 종목 통합 API의 투자지표에서 읽는다.
+def fetch_valuation(code: str) -> tuple[float | None, float | None]:
+    """(PBR, PER) 배. 네이버 종목 통합 API의 투자지표에서 한 번에 읽는다.
 
-    결측/0 이하/N/A는 None. 값은 최근 결산 기준 BPS 대비 현재가 비율이라
-    매일 가격에 따라 조금씩 움직인다.
+    결측/0 이하/N/A는 None. 값은 최근 결산 기준이라 매일 가격에 따라 조금씩
+    움직인다. 적자 기업의 PER은 음수·N/A로 오므로 None으로 두어
+    '저PER' 목록에 적자 종목이 섞이지 않게 한다.
     """
     try:
         d = json.loads(http_get(f"https://m.stock.naver.com/api/stock/{code}/integration"))
     except Exception:  # noqa: BLE001
-        return None
+        return None, None
+    got: dict[str, float | None] = {"pbr": None, "per": None}
     for info in d.get("totalInfos") or []:
-        if info.get("code") != "pbr":
+        k = info.get("code")
+        if k not in got:
             continue
         s = str(info.get("value") or "").replace(",", "").replace("배", "").strip()
         if s in ("", "-", "N/A", "nan"):
-            return None
+            continue
         try:
             v = float(s)
         except ValueError:
-            return None
-        return round(v, 2) if v > 0 else None
-    return None
+            continue
+        if v > 0:
+            got[k] = round(v, 2)
+    return got["pbr"], got["per"]
 
 
 def fetch_trend(code: str) -> list[dict]:
@@ -382,8 +386,9 @@ def days_since_break(closes: list[float], n: int, lookback: int = 9):
 
 
 def build_stock(row: dict, hist: list[list], trend: list[dict],
-                pbr_val: float | None = None) -> dict:
-    """개별 종목 계산. hist는 오래된→최신 순."""
+                val: tuple[float | None, float | None] = (None, None)) -> dict:
+    """개별 종목 계산. hist는 오래된→최신 순. val=(pbr, per)."""
+    pbr_val, per_val = val
     # --- 일별 흐름(최신순) 매핑
     trend = [t for t in trend if t.get("date")]
     trend.sort(key=lambda t: t["date"])            # 오래된→최신
@@ -499,9 +504,12 @@ def build_stock(row: dict, hist: list[list], trend: list[dict],
         "fd": flow_date,
         "fr": trend[-1].get("fratio") if trend else None,
     }
-    # PBR (주가순자산비율). 유효값(>0)만 기록한다.
+    # PBR (주가순자산비율) · PER (주가수익비율). 유효값(>0)만 기록한다.
+    # 적자(0 이하) PER은 저장하지 않아 저PER 목록에서 빠진다.
     if pbr_val is not None and pbr_val > 0:
         st["pbr"] = round(float(pbr_val), 2)
+    if per_val is not None and per_val > 0:
+        st["per"] = round(float(per_val), 2)
     # 지금 보여주는 가격이 NXT 프리/애프터 시세인지 표시용 라벨
     if row.get("nxt"):
         st["nxt"] = row["nxt"]
@@ -629,23 +637,28 @@ def main():
     prev_macro = {m.get("key"): m for m in (prev.get("macro") or [])}
     macro = fetch_macro(prev_macro)
 
-    # --- PBR : 종목별 통합 API에서 병렬 수집. 실패 시 직전 수집값 유지.
-    prev_pbr = {s.get("c"): s.get("pbr") for s in (prev.get("stocks") or []) if s.get("pbr")}
-    print(f"[3/6] PBR 수집 ({len(universe)}종목, workers={PBR_WORKERS})…", flush=True)
-    pbr_map: dict[str, float | None] = {}
-    pbr_fail = 0
-    t_pbr = time.time()
-    with ThreadPoolExecutor(max_workers=PBR_WORKERS) as ex:
-        for i, (code, v) in enumerate(ex.map(lambda r: (r["code"], fetch_pbr(r["code"])), universe), 1):
-            if v is not None:
-                pbr_map[code] = v
+    # --- PER·PBR : 종목별 통합 API에서 한 번에 병렬 수집. 실패 시 직전 수집값 유지.
+    prev_val = {s.get("c"): (s.get("pbr"), s.get("per")) for s in (prev.get("stocks") or [])}
+    print(f"[3/6] PER·PBR 수집 ({len(universe)}종목, workers={VAL_WORKERS})…", flush=True)
+    val_map: dict[str, tuple[float | None, float | None]] = {}
+    val_fail = 0
+    t_val = time.time()
+    with ThreadPoolExecutor(max_workers=VAL_WORKERS) as ex:
+        for i, (code, v) in enumerate(ex.map(lambda r: (r["code"], fetch_valuation(r["code"])), universe), 1):
+            pbr, per = v
+            old_pbr, old_per = prev_val.get(code, (None, None))
+            if pbr is None and per is None:
+                val_fail += 1
+                val_map[code] = (old_pbr, old_per)
             else:
-                pbr_fail += 1
-                pbr_map[code] = prev_pbr.get(code)
+                val_map[code] = (pbr if pbr is not None else old_pbr,
+                                 per if per is not None else old_per)
             if i % 1000 == 0:
-                print(f"      {i}/{len(universe)} ({time.time()-t_pbr:.0f}s)", flush=True)
-    print(f"      PBR 확보 {sum(1 for v in pbr_map.values() if v)}종목 / 응답없음 {pbr_fail} "
-          f"({time.time()-t_pbr:.0f}s)", flush=True)
+                print(f"      {i}/{len(universe)} ({time.time()-t_val:.0f}s)", flush=True)
+    pbr_got = sum(1 for p, e in val_map.values() if p)
+    per_got = sum(1 for p, e in val_map.values() if e)
+    print(f"      PBR {pbr_got}종목 · PER {per_got}종목 / 응답없음 {val_fail} "
+          f"({time.time()-t_val:.0f}s)", flush=True)
 
     start = (now - timedelta(days=CHART_LOOKBACK)).strftime("%Y%m%d")
     end = now.strftime("%Y%m%d")
@@ -659,7 +672,7 @@ def main():
         try:
             hist = fetch_hist(code, start, end)
             trend = fetch_trend(code)
-            return code, build_stock(row, hist, trend, pbr_map.get(code))
+            return code, build_stock(row, hist, trend, val_map.get(code) or (None, None))
         except Exception as e:  # noqa: BLE001
             return code, {"__error": str(e)[:120]}
 
@@ -694,11 +707,22 @@ def main():
     down = sum(1 for s in summaries if (s.get("chp") or 0) < 0)
     flat = len(summaries) - up - down
     pbr_n = sum(1 for s in summaries if s.get("pbr"))
+    per_n = sum(1 for s in summaries if s.get("per"))
+
+    def _trend_ok(s) -> bool:
+        return (s.get("b60") == 1 or s.get("b120") == 1
+                or (s.get("x60") is not None and s["x60"] <= 4)
+                or (s.get("x120") is not None and s["x120"] <= 4))
+
+    def _low_per(cap: float) -> int:
+        return sum(1 for s in summaries
+                   if s.get("per") and 0 < s["per"] <= cap and _trend_ok(s))
+
+    low_per = {"le1": _low_per(1.0), "le1_5": _low_per(1.5), "le5": _low_per(5.0),
+               "le10": _low_per(10.0), "le15": _low_per(15.0)}
+    low_per_n = low_per["le1_5"]
     low_pbr_n = sum(1 for s in summaries
-                    if s.get("pbr") and s["pbr"] <= 1.0
-                    and (s.get("b60") == 1 or s.get("b120") == 1
-                         or (s.get("x60") is not None and s["x60"] <= 4)
-                         or (s.get("x120") is not None and s["x120"] <= 4)))
+                    if s.get("pbr") and s["pbr"] <= 1.0 and _trend_ok(s))
 
     payload = {
         "generatedAt": now.isoformat(timespec="seconds"),
@@ -710,7 +734,9 @@ def main():
             "kosdaq": sum(1 for s in summaries if s["m"] == "Q"),
             "up": up, "down": down, "flat": flat,
             "errors": len(errors),
-            "pbr": pbr_n, "pbrFail": pbr_fail, "lowPbr": low_pbr_n,
+            "pbr": pbr_n, "pbrFail": val_fail, "lowPbr": low_pbr_n,
+            "per": per_n, "perFail": val_fail, "lowPer": low_per_n,
+            "lowPerByCap": low_per,
         },
         "indices": indices,
         "macro": macro,
@@ -750,6 +776,9 @@ def main():
         "errors": len(errors),
         "pbr": pbr_n,
         "lowPbr": low_pbr_n,
+        "per": per_n,
+        "lowPer": low_per_n,
+        "lowPerByCap": low_per,
         "chartDays": round(y_rows / max(1, len(results))),
         "elapsedSec": round(time.time() - t0, 1),
     }
@@ -758,7 +787,10 @@ def main():
 
     size = os.path.getsize(os.path.join(DATA, "market.json"))
     print(f"OK {len(summaries)}종목 / market.json {size/1024/1024:.2f}MB / {meta['elapsedSec']}s / "
-          f"수급기준일 {flow_date} / PBR {pbr_n}종목 · 추세전환+PBR≤1 {low_pbr_n}종목", flush=True)
+          f"수급기준일 {flow_date} / PER {per_n}종목 · 추세전환+PER≤1.5 {low_per_n}종목 "
+          f"(추세전환 없이 PER≤1.5만: {sum(1 for s in summaries if s.get('per') and s['per'] <= 1.5)}종목) "
+          f"/ PER≤1 {low_per['le1']} · ≤5 {low_per['le5']} · ≤10 {low_per['le10']} · ≤15 {low_per['le15']}",
+          flush=True)
     if errors:
         print("실패 종목:", ",".join(errors[:20]), flush=True)
     return 0

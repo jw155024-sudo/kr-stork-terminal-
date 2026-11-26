@@ -7,7 +7,7 @@
 <title>KR Terminal — 국내주식 전종목</title>
 <meta name="robots" content="noindex,nofollow">
 <meta name="description" content="국내 주식 전 종목 시세·외국인 수급·연속 매수 필터·차트·물타기 계산기">
-<link rel="stylesheet" href="styles.css?v=20261127f">
+<link rel="stylesheet" href="styles.css?v=20261127g">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230b0e13'/><path d='M22 70 L42 46 L56 58 L78 28' stroke='%234da3ff' stroke-width='8' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 </head>
 <body>
@@ -31,7 +31,7 @@
   <button class="tab" data-tab="foreign">외국인 <em id="cntFor">–</em></button>
   <button class="tab" data-tab="inst">기관 <em id="cntInst">–</em></button>
   <button class="tab" data-tab="rose">전일 상승 → 오늘 <em id="cntRose">–</em></button>
-  <button class="tab" data-tab="lowpbr">추세·저PBR <em id="cntPbr">–</em></button>
+  <button class="tab" data-tab="lowper">추세·저PER <em id="cntPer">–</em></button>
   <button class="tab" data-tab="mine">내 종목 <em id="cntMine">0</em></button>
 </nav>
 
@@ -82,11 +82,12 @@
     <button class="chip" data-tr="above" title="현재가가 60일선·120일선 모두 위">60·120 위</button>
   </div>
   <div class="fgroup lp scroll">
-    <span class="flabel" title="주가순자산비율(네이버 금융 기준)">PBR</span>
-    <button class="chip on" data-pb="1">≤ 1.0</button>
-    <button class="chip" data-pb="1.2">≤ 1.2</button>
-    <button class="chip" data-pb="0.8">≤ 0.8</button>
-    <button class="chip" data-pb="0.5">≤ 0.5</button>
+    <span class="flabel" title="주가수익비율(배) · 적자(0 이하) 제외 · 네이버 금융">PER</span>
+    <button class="chip" data-pm="1">≤ 1</button>
+    <button class="chip on" data-pm="1.5">≤ 1.5</button>
+    <button class="chip" data-pm="5">≤ 5</button>
+    <button class="chip" data-pm="10">≤ 10</button>
+    <button class="chip" data-pm="15">≤ 15</button>
   </div>
   <div class="fgroup scroll chartgrp">
     <span class="flabel">차트</span>
@@ -142,6 +143,6 @@
   </aside>
 </div>
 
-<script src="app.js?v=20261127f"></script>
+<script src="app.js?v=20261127g"></script>
 </body>
 </html>
