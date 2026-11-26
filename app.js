@@ -97,7 +97,10 @@
     const t = g.toLocaleString("ko-KR", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
     const fd = d.flowDate ? d.flowDate.slice(4, 6) + "/" + d.flowDate.slice(6, 8) : "–";
     const st = (d.indices && d.indices.KOSPI && d.indices.KOSPI.status) === "OPEN" ? "장중" : "장마감";
-    $("#stamp").textContent = `갱신 ${t} · ${st} · 외인수급 ${fd} 기준 · ${nf.format(d.counts.total)}종목`;
+    // NXT 프리/애프터 시세가 반영된 종목이 있으면 그 세션명을 보여준다.
+    const nx = (d.stocks || []).reduce((a, s) => (s.nxt === "프리" ? a[0]++ : s.nxt ? a[1]++ : 0, a), [0, 0]);
+    const ses = (nx[0] || nx[1]) ? (nx[0] > nx[1] ? "프리장" : "애프터장") : st;
+    $("#stamp").textContent = `갱신 ${t} · ${ses} · 외인수급 ${fd} 기준 · ${nf.format(d.counts.total)}종목`;
   }
 
   /* ─────────────────────────── 상단 시장 요약 ─────────────────────────── */
@@ -298,6 +301,14 @@
     return out.length ? out.join("") : '<span class="pill n">–</span>';
   }
 
+  /* ─────────────────── NXT 프리·애프터마켓 시세 표시 ─────────────────── */
+  function nxtBadge(s) {
+    if (!s.nxt) return "";
+    const k = s.nxt === "프리" ? "pre" : "af";
+    const when = s.nxt === "프리" ? "프리마켓 08:00~08:50" : "애프터마켓 15:40~20:00";
+    return `<span class="nxt ${k}" title="NXT ${when} 체결가">${s.nxt}</span>`;
+  }
+
   function rowHtml(s) {
     const cols = COLS[state.tab] || COLS.all;
     const star = state.watch.has(s.c) ? '<span style="color:#f5c451">★</span>' : "";
@@ -310,7 +321,7 @@
         <div class="nm">${star}${s.n}<span class="code">${s.c}</span><span class="mkt ${s.m}">${s.m === "K" ? "코스피" : "코스닥"}</span></div>
         <div class="badges">${badges(s)}</div>
       </td>
-      <td data-k="p" class="pcell ${cls(s.chp)}">${fmt(s.p)}</td>
+      <td data-k="p" class="pcell ${cls(s.chp)}">${fmt(s.p)}${nxtBadge(s)}</td>
       ${cells}
     </tr>`;
   }
@@ -417,6 +428,11 @@
     $("#dPrice").className = c;
     $("#dChg").className = c;
     $("#dChg").textContent = `${s.ch != null ? (s.ch > 0 ? "+" : "") + nf.format(s.ch) : "–"} (${signedTxt(s.chp)})`;
+    const dn = $("#dNxt");
+    if (dn) {
+      dn.hidden = !s.nxt;
+      dn.innerHTML = s.nxt ? nxtBadge(s) : "";
+    }
   }
 
   function renderDetail(s, rows) {

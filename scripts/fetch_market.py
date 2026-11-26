@@ -42,6 +42,10 @@ WORKERS = int(os.environ.get("FETCH_WORKERS", "20"))
 HIST_DAYS = 60          # 상세 화면용 일별 데이터 보관 거래일 수
 FLOW_WINDOW = 30        # 연속 매수 계산에 쓰는 최대 거래일
 
+# NXT(넥스트레이드) 프리·애프터마켓 표시 시간대 (KST, 분 단위)
+NXT_PRE_FROM, NXT_PRE_TO = 8 * 60, 9 * 60            # 프리 08:00~08:50, 09:00 정규장 개장
+NXT_AFTER_FROM = 15 * 60 + 40                        # 애프터 15:40~20:00 (마감 뒤에도 당일 마지막 시세 유지)
+
 
 # ---------------------------------------------------------------- http helpers
 def http_get(url: str, timeout: int = 25, headers: dict | None = None) -> bytes:
@@ -83,9 +87,45 @@ def pct(v, default=None):
 
 
 # ------------------------------------------------------------------- markets
+def over_market_quote(s: dict, now: datetime) -> dict | None:
+    """NXT 프리/애프터마켓 체결가(overMarketPriceInfo) 중 지금 보여야 할 값을 고른다.
+
+    네이버의 marketStatus는 정규장이 끝난 뒤에도 NXT 세션이 열려 있는 종목은 'OPEN'으로
+    남아 있다(ETF·ETN처럼 NXT 미지원 종목만 'CLOSE'). 그래서 정규장 여부 판단에는 쓰지 않고
+    세션 종류(프리/애프터)·체결 시각(당일 여부)·현재 KST 시각으로 판정한다.
+    """
+    o = s.get("overMarketPriceInfo")
+    if not isinstance(o, dict):
+        return None
+    session = str(o.get("tradingSessionType") or "").upper()
+    price = num(o.get("overPriceRaw"), num(o.get("overPrice")))
+    if not price or price <= 0:
+        return None
+    if "PRE" in session:
+        label, ok = "프리", NXT_PRE_FROM <= now.hour * 60 + now.minute < NXT_PRE_TO
+    elif "AFTER" in session:
+        label, ok = "애프터", now.hour * 60 + now.minute >= NXT_AFTER_FROM
+    else:
+        return None
+    traded = str(o.get("localTradedAt") or "")
+    # 당일 세션 체결분만 쓴다(전일·휴장일 애프터 시세로 오인하지 않도록)
+    if not traded.startswith(now.strftime("%Y-%m-%d")) or not ok:
+        return None
+    return {
+        "label": label,
+        "price": price,
+        "change": num(o.get("compareToPreviousClosePriceRaw"),
+                      num(o.get("compareToPreviousClosePrice"))),
+        "chgPct": pct(o.get("fluctuationsRatio")),
+        "tradedAt": traded,
+        "sessionStatus": o.get("overMarketStatus"),
+    }
+
+
 def fetch_universe() -> list[dict]:
     """코스피 + 코스닥 전 종목 시세 스냅샷."""
     out: list[dict] = []
+    now = datetime.now(KST)
     for market in ("KOSPI", "KOSDAQ"):
         url = lambda p: (f"https://m.stock.naver.com/api/stocks/marketValue/{market}"
                          f"?page={p}&pageSize=100")
@@ -112,7 +152,7 @@ def fetch_universe() -> list[dict]:
             for s in stocks:
                 if s.get("stockEndType") != "stock":
                     continue
-                out.append({
+                row = {
                     "code": s.get("itemCode"),
                     "name": s.get("stockName"),
                     "market": market,
@@ -125,7 +165,17 @@ def fetch_universe() -> list[dict]:
                     "mcap": num(s.get("marketValueRaw"), 0),
                     "status": s.get("marketStatus"),
                     "tradedAt": s.get("localTradedAt"),
-                })
+                }
+                # 프리/애프터 시세가 유효하면 정규장 스냅샷을 덮어쓰고 표시용 라벨을 남긴다.
+                q = over_market_quote(s, now)
+                if q:
+                    row["regPrice"] = row["price"]
+                    row["price"] = q["price"]
+                    row["change"] = q["change"]
+                    row["chgPct"] = q["chgPct"]
+                    row["tradedAt"] = q["tradedAt"]
+                    row["nxt"] = q["label"]
+                out.append(row)
     # 코드 중복 제거
     seen = {}
     for s in out:
@@ -397,6 +447,9 @@ def build_stock(row: dict, hist: list[list], trend: list[dict]) -> dict:
         "fd": flow_date,
         "fr": trend[-1].get("fratio") if trend else None,
     }
+    # 지금 보여주는 가격이 NXT 프리/애프터 시세인지 표시용 라벨
+    if row.get("nxt"):
+        st["nxt"] = row["nxt"]
     # 이평선 돌파/위 여부 (b60·b120: 오늘 신규 돌파, a60·a120: 현재가가 선 위)
     for _k, _v in (("b60", b60), ("b120", b120), ("a60", a60), ("a120", a120)):
         if _v is not None:
