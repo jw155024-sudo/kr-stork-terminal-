@@ -322,9 +322,6 @@
   /* 종목명 아래 배지: 외인/기관 연속, 연속 상승, 이평선 돌파 */
   function badges(s) {
     const out = [];
-    if (state.tab === "lowpbr" && s.pbr != null) {
-      out.push(`<span class="pill pbrpill" title="PBR(주가순자산비율) ${s.pbr.toFixed(2)}배">PBR ${s.pbr.toFixed(2)}</span>`);
-    }
     const fcAmt = (state.tab === "foreign" && s.fvc) ? ` · ${won(s.fvc)}` : "";
     if (s.fc) {
       const t = `외국인 ${Math.abs(s.fc)}일 연속 ${s.fc > 0 ? "순매수" : "순매도"}` + (s.fvc ? ` · 누적 ${won(s.fvc)}` : "");

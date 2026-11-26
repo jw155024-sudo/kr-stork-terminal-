@@ -7,7 +7,7 @@
 <title>KR Terminal — 국내주식 전종목</title>
 <meta name="robots" content="noindex,nofollow">
 <meta name="description" content="국내 주식 전 종목 시세·외국인 수급·연속 매수 필터·차트·물타기 계산기">
-<link rel="stylesheet" href="styles.css?v=20261127a">
+<link rel="stylesheet" href="styles.css?v=20261127b">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230b0e13'/><path d='M22 70 L42 46 L56 58 L78 28' stroke='%234da3ff' stroke-width='8' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 </head>
 <body>
@@ -74,14 +74,14 @@
     <button class="chip" data-pp="5">5</button>
     <span class="numwrap" id="wP"><input id="inP" type="number" min="0" max="99" inputmode="numeric" placeholder="0" aria-label="연속 상승 일수 직접 입력"><i>일+</i></span>
   </div>
-  <div class="fgroup lp">
+  <div class="fgroup lp scroll">
     <span class="flabel" title="60·120일선 추세전환">추세</span>
     <button class="chip on" data-tr="both" title="오늘 또는 최근 5거래일 내 60·120일선 상향 돌파">60/120 돌파</button>
     <button class="chip" data-tr="b60" title="오늘 또는 최근 5거래일 내 60일선 상향 돌파">60일선 돌파</button>
     <button class="chip" data-tr="b120" title="오늘 또는 최근 5거래일 내 120일선 상향 돌파">120일선 돌파</button>
     <button class="chip" data-tr="above" title="현재가가 60일선·120일선 모두 위">60·120 위</button>
   </div>
-  <div class="fgroup lp">
+  <div class="fgroup lp scroll">
     <span class="flabel" title="주가순자산비율(네이버 금융 기준)">PBR</span>
     <button class="chip on" data-pb="1">≤ 1.0</button>
     <button class="chip" data-pb="1.2">≤ 1.2</button>
@@ -142,6 +142,6 @@
   </aside>
 </div>
 
-<script src="app.js?v=20261127a"></script>
+<script src="app.js?v=20261127b"></script>
 </body>
 </html>
