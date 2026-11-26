@@ -774,7 +774,7 @@
   const CHC = {
     up: "#f6465d", down: "#3b82f6",
     ma5: "#22d3ee", ma20: "#ff8ad4", ma60: "#ffb347", ma120: "#c2a578",
-    tenkan: "#34d399", kijun: "#f5a524", chikou: "#2f9e6e",
+    tenkan: "#4ade80", kijun: "#ffd166", chikou: "#1f8a5f",
     spanA: "#f87171", spanB: "#60a5fa",
     grid: "#1a2431", axis: "#63708a"
   };
@@ -792,7 +792,7 @@
     cv: null, g: null, wrap: null, tip: null,
     rows: [], ind: null, code: null,
     cssW: 0, cssH: 0, volH: 46,
-    padL: 6, padR: 58, padT: 12, padB: 16, gapV: 12,
+    padL: 6, padR: 62, padT: 12, padB: 16, gapV: 12,
     view: { n: 250, end: 0 },
     opts: chOpts(),
     hover: null, ptrs: new Map(), drag: null, pinch: null, tap: null, lastTap: 0
@@ -865,7 +865,7 @@
     CH.cssW = Math.max(220, Math.round(px));
     CH.cssH = CH.cssW < 460 ? 300 : 360;
     CH.volH = Math.round(CH.cssH * 0.18);
-    CH.padR = CH.cssW < 460 ? 50 : 58;
+    CH.padR = CH.cssW < 460 ? 54 : 62;
   }
 
   function chartOpen(cv, rows, s) {
