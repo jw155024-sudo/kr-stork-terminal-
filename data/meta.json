@@ -1,5 +1,5 @@
 {
- "generatedAt": "2026-11-27T20:49:45+09:00",
+ "generatedAt": "2026-11-27T21:19:14+09:00",
  "flowDate": "20261127",
  "stocks": 2773,
  "errors": 0,
@@ -15,5 +15,5 @@
   "le15": 177
  },
  "chartDays": 369,
- "elapsedSec": 261.2
+ "elapsedSec": 258.2
 }
