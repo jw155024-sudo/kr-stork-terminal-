@@ -1,19 +1,19 @@
 {
- "generatedAt": "2026-11-27T17:36:40+09:00",
+ "generatedAt": "2026-11-27T18:06:45+09:00",
  "flowDate": "20261126",
  "stocks": 2772,
  "errors": 0,
  "pbr": 2740,
  "lowPbr": 257,
- "per": 1694,
+ "per": 1693,
  "lowPer": 4,
  "lowPerByCap": {
   "le1": 1,
   "le1_5": 4,
-  "le5": 41,
-  "le10": 137,
-  "le15": 183
+  "le5": 45,
+  "le10": 139,
+  "le15": 184
  },
  "chartDays": 369,
- "elapsedSec": 261.7
+ "elapsedSec": 259.2
 }
