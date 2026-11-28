@@ -650,15 +650,16 @@
       <div class="sect">
         <h3>차트 <span class="chinfo" id="chInfo"></span></h3>
         <div class="chbar" id="chBar">
-          <div class="chgrp" id="chRng">
-            <button data-rng="60">3개월</button>
-            <button data-rng="120">6개월</button>
-            <button data-rng="250" class="on">1년</button>
+          <div class="chgrp unit" id="chUnit" role="group" aria-label="차트 주기">
+            <button data-unit="D" class="on" title="일봉">일봉</button>
+            <button data-unit="W" title="주봉(월~금 합산)">주봉</button>
+            <button data-unit="M" title="월봉">월봉</button>
           </div>
+          <div class="chgrp" id="chRng"></div>
           <div class="chgrp">
             <button id="chZo" title="축소" aria-label="축소">−</button>
             <button id="chZi" title="확대" aria-label="확대">+</button>
-            <button id="chRs" title="1년·최근으로">초기화</button>
+            <button id="chRs" title="최근·기본 보기로">초기화</button>
           </div>
         </div>
         <div class="chwrap" id="chWrap">
@@ -666,13 +667,13 @@
           <div class="chtip" id="chTip" hidden></div>
         </div>
         <div class="chleg" id="chLeg">
-          <button data-ch="ma5" class="on"><i style="background:${CHC.ma5}"></i>5일</button>
-          <button data-ch="ma20" class="on"><i style="background:${CHC.ma20}"></i>20일</button>
-          <button data-ch="ma60" class="on"><i style="background:${CHC.ma60}"></i>60일</button>
-          <button data-ch="ma120" class="on"><i style="background:${CHC.ma120}"></i>120일</button>
+          <button data-ch="ma5" class="on"><i style="background:${CHC.ma5}"></i><span data-malab="5">5일</span></button>
+          <button data-ch="ma20" class="on"><i style="background:${CHC.ma20}"></i><span data-malab="20">20일</span></button>
+          <button data-ch="ma60" class="on"><i style="background:${CHC.ma60}"></i><span data-malab="60">60일</span></button>
+          <button data-ch="ma120" class="on"><i style="background:${CHC.ma120}"></i><span data-malab="120">120일</span></button>
           <button data-ch="ichi" class="on ichi"><i class="sw"></i>일목균형표</button>
         </div>
-        <div class="hint">휠·두 손가락으로 확대/축소, 드래그·좌우 스와이프로 이동. 봉을 누르면 시·고·저·종가와 거래량이 나옵니다. 구름대는 빨강이 양운(상승), 파랑이 음운(하락)입니다.</div>
+        <div class="hint">휠·두 손가락으로 확대/축소, 드래그·좌우 스와이프로 이동. 봉을 누르면 시·고·저·종가와 거래량이 나옵니다. 구름대는 빨강이 양운(상승), 파랑이 음운(하락)입니다. 주봉·월봉은 일봉을 합산해 그립니다.</div>
       </div>
 
       <div class="sect"><h3>종목 정보</h3><div class="kv">${kv}</div></div>
@@ -841,7 +842,13 @@
     grid: "#1a2431", axis: "#63708a"
   };
   const CH_MA = [["ma5", 5, CHC.ma5], ["ma20", 20, CHC.ma20], ["ma60", 60, CHC.ma60], ["ma120", 120, CHC.ma120]];
-  const CH_RANGE = { 60: "3개월", 120: "6개월", 250: "1년" };
+  /* 주기별 보기 기간: [봉 개수, 라벨] */
+  const CH_RANGES = {
+    D: [[60, "3개월"], [120, "6개월"], [250, "1년"]],
+    W: [[13, "3개월"], [26, "6개월"], [52, "1년"]],
+    M: [[3, "3개월"], [6, "6개월"], [12, "1년"]]
+  };
+  const chUnitTxt = () => CH.unit === "M" ? "월" : CH.unit === "W" ? "주" : "일";
 
   function chOpts() {
     const o = { ma5: 1, ma20: 1, ma60: 1, ma120: 1, ichi: 1 };
@@ -852,6 +859,8 @@
 
   const CH = {
     cv: null, g: null, wrap: null, tip: null,
+    daily: [],            // 원본 일봉 (data/y + 당일 봉)
+    unit: "D",           // D | W | M
     rows: [], ind: null, code: null,
     cssW: 0, cssH: 0, volH: 46,
     padL: 6, padR: 62, padT: 12, padB: 16, gapV: 12,
@@ -865,6 +874,74 @@
     const yy = 2000 + Number(s.slice(0, 2)), mm = Number(s.slice(2, 4)), dd = Number(s.slice(4, 6));
     const wd = "일월화수목금토"[new Date(yy, mm - 1, dd).getDay()];
     return { full: `${yy}.${s.slice(2, 4)}.${s.slice(4, 6)}`, short: `${s.slice(2, 4)}/${s.slice(4, 6)}`, ymd: `${s.slice(0, 2)}/${s.slice(2, 4)}/${s.slice(4, 6)}`, wd };
+  }
+
+  /* 일봉 → 주봉(월~일 기준 주차)·월봉 집계
+     시가=첫 봉 시가, 고가=기간 최고, 저가=기간 최저, 종가=마지막 봉 종가,
+     거래량=합계, 날짜=마지막 거래일, 7번째 값=기간 첫 거래일 */
+  function aggBars(rows, unit) {
+    const src = rows || [];
+    if (unit !== "W" && unit !== "M") return src.map(r => r.slice(0, 6));
+    const out = [];
+    let key = null, cur = null;
+    for (let i = 0; i < src.length; i++) {
+      const r = src[i];
+      const d = Number(r[0]);
+      if (!d) continue;
+      const yy = 2000 + Math.floor(d / 10000), mm = Math.floor(d / 100) % 100, dd = d % 100;
+      let k;
+      if (unit === "M") {
+        k = yy * 100 + mm;
+      } else {
+        const dt = new Date(yy, mm - 1, dd);
+        dt.setDate(dt.getDate() - ((dt.getDay() + 6) % 7)); // 그 주 월요일
+        k = ((dt.getFullYear() % 100) * 100 + (dt.getMonth() + 1)) * 100 + dt.getDate();
+      }
+      const o = Number(r[1]), h = Number(r[2]), l = Number(r[3]), c = Number(r[4]), v = Number(r[5]) || 0;
+      if (k !== key || !cur) {
+        cur = [d, o, h, l, c, v, d];
+        out.push(cur);
+        key = k;
+      } else {
+        if (h > cur[2]) cur[2] = h;
+        if (l < cur[3]) cur[3] = l;
+        cur[4] = c;
+        cur[5] += v;
+        cur[0] = d;    // 마지막 거래일
+      }
+    }
+    return out;
+  }
+
+  function unitDefaultN(unit, N) {
+    if (!N) return 20;
+    if (unit === "D") return Math.max(Math.min(20, N), Math.min(250, N));
+    return N;  // 주봉·월봉은 가진 봉 전체를 보여준다
+  }
+
+  function renderRangeBtns() {
+    const el = $("#chRng");
+    if (!el) return;
+    const list = CH_RANGES[CH.unit] || CH_RANGES.D;
+    el.innerHTML = list.map(([n, l]) => `<button data-rng="${n}">${l}</button>`).join("");
+  }
+
+  function updateMaLabels() {
+    const u = chUnitTxt();
+    $$("#chLeg [data-malab]").forEach(el => { el.textContent = el.dataset.malab + u; });
+  }
+
+  function setChartUnit(u) {
+    if (!CH.daily.length || (u !== "D" && u !== "W" && u !== "M")) return;
+    CH.unit = u;
+    CH.rows = aggBars(CH.daily, u);
+    CH.ind = CH.rows.length ? chartIndicators(CH.rows) : null;
+    CH.hover = null; hideTip();
+    CH.view = { n: unitDefaultN(u, CH.rows.length), end: CH.rows.length };
+    renderRangeBtns();
+    updateMaLabels();
+    syncChBtns();
+    chartDraw();
   }
 
   function chartIndicators(rows) {
@@ -935,13 +1012,17 @@
     CH.g = cv ? cv.getContext("2d") : null;
     CH.wrap = cv ? cv.parentElement : null;
     CH.tip = $("#chTip");
-    CH.rows = (rows || []).slice();
+    CH.daily = (rows || []).slice();
+    CH.unit = "D";   // 종목을 열면 항상 일봉부터
+    CH.rows = aggBars(CH.daily, "D");
     CH.ind = CH.rows.length ? chartIndicators(CH.rows) : null;
     CH.code = s ? s.c : null;
     CH.opts = chOpts();
     CH.hover = null;
     const N = CH.rows.length;
-    CH.view = { n: Math.min(250, Math.max(20, N)), end: N };
+    CH.view = { n: unitDefaultN("D", N), end: N };
+    renderRangeBtns();
+    updateMaLabels();
     chartResize();
     chartBind();
     syncChBtns();
@@ -1081,7 +1162,8 @@
       g.strokeStyle = "rgba(33,43,56,.75)";
       g.beginPath(); g.moveTo(x, yTop); g.lineTo(x, yBot); g.stroke();
       g.fillStyle = CHC.axis;
-      const lbl = chartDate(rows[i][0]).short;
+      const cd0 = chartDate(rows[i][0]);
+      const lbl = CH.unit === "M" ? cd0.ymd.slice(0, 5) : cd0.short;
       const tw = g.measureText(lbl).width / 2;
       g.fillText(lbl, Math.max(padL + tw, Math.min(x, padL + plotW - tw)), H - padB + 4);
     }
@@ -1144,7 +1226,7 @@
     /* ── 요약 문구 */
     const info = $("#chInfo");
     if (info) {
-      info.textContent = `${CH_RANGE[cnt] || cnt + "봉"} · 최고 ${fmt(rows[hiI][2])} (${chartDate(rows[hiI][0]).ymd}) · 최저 ${fmt(rows[loI][3])} (${chartDate(rows[loI][0]).ymd})`;
+      info.textContent = `${chUnitTxt()}봉 ${cnt}개 · 최고 ${fmt(rows[hiI][2])} (${chartDate(rows[hiI][0]).ymd}) · 최저 ${fmt(rows[loI][3])} (${chartDate(rows[loI][0]).ymd})`;
     }
     syncChBtns();
   }
@@ -1152,6 +1234,7 @@
   function syncChBtns() {
     const n = CH.view.n;
     $$("#chRng button").forEach(b => b.classList.toggle("on", Number(b.dataset.rng) === n));
+    $$("#chUnit button").forEach(b => b.classList.toggle("on", b.dataset.unit === CH.unit));
     $$("#chLeg button").forEach(b => b.classList.toggle("on", !!CH.opts[b.dataset.ch]));
   }
 
@@ -1172,7 +1255,7 @@
 
   function chartReset() {
     const N = CH.rows.length;
-    CH.view = { n: Math.min(250, Math.max(20, N)), end: N };
+    CH.view = { n: unitDefaultN(CH.unit, N), end: N };
     CH.hover = null; hideTip();
     chartDraw();
   }
@@ -1188,7 +1271,10 @@
     const prev = i > 0 ? CH.rows[i - 1][4] : null;
     const chp = prev ? (r[4] / prev - 1) * 100 : null;
     const dt = chartDate(r[0]);
-    tip.innerHTML = `<div class="td">${dt.full} <i>${dt.wd}</i></div>
+    const head = (CH.unit !== "D" && r[6] && r[6] !== r[0])
+      ? `${chartDate(r[6]).short}~${dt.short} <i>${CH.unit === "M" ? "월" : "주"}</i>`
+      : `${dt.full} <i>${dt.wd}</i>`;
+    tip.innerHTML = `<div class="td">${head}</div>
       <div class="tg">
         <span>시가</span><b>${fmt(r[1])}</b>
         <span>고가</span><b>${fmt(r[2])}</b>
@@ -1347,6 +1433,7 @@
     bar.addEventListener("click", e => {
       const b = e.target.closest("button");
       if (!b) return;
+      if (b.dataset.unit) { setChartUnit(b.dataset.unit); return; }
       const N = CH.rows.length;
       if (b.dataset.rng) {
         const n = Math.min(N, Number(b.dataset.rng));
