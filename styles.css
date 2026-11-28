@@ -196,6 +196,12 @@ main{padding:10px 18px 40px;max-width:1280px;margin:0 auto}
 }
 .mb.brk{color:#04121f;border-color:#3d9be0;background:linear-gradient(140deg,#63b3ff,#22d3ee)}
 .mb.above{color:#7ee0a6;border-color:#1f4a34;background:rgba(38,180,110,.1);display:none}
+.mb.in{color:#ffd9a0;border-color:#7a5623;background:rgba(245,165,36,.14)}
+.cld{font-style:normal;font-size:10px;font-weight:600;color:var(--tx3);font-variant-numeric:tabular-nums}
+.cld.up{color:#ff9aab}
+/* 구름대 돌파 탭 요약 */
+.cloudsum .rmeta b{color:var(--tx2);font-weight:650}
+body:not(.t-cloud) .cloudsum{display:none !important}
 
 /* 직접 입력 필터 */
 .din .numwrap{
@@ -356,6 +362,15 @@ textarea:focus{border-color:var(--acc)}
   .tbl td[data-k="r20"]{grid-area:3/2/4/3;text-align:right;font-size:11.5px;margin-top:2px}
   .tbl td[data-k="r20"]::before{content:"20일 ";color:var(--tx3);font-size:10.5px;font-weight:500}
   .tbl td[data-k="fq"],.tbl td[data-k="va"],.tbl td[data-k="ma"]{display:none}
+  /* 구름대 돌파 탭: PER·외인은 2~3행, 구름대 상태는 3행 왼쪽 */
+  body.t-cloud .tbl td[data-k="fv"]{grid-area:3/2/4/3;text-align:right;margin-top:2px}
+  body.t-cloud .tbl td[data-k="cloud"]{
+    grid-area:3/1/4/2;font-size:11.5px;color:var(--tx2);margin-top:2px;
+    display:flex;align-items:center;gap:4px;
+  }
+  body.t-cloud .tbl td[data-k="cloud"]::before{content:"구름 ";color:var(--tx3);font-size:10.5px;font-weight:500}
+  body.t-cloud .tbl td[data-k="cloud"] .mb{font-size:10px;padding:1px 5px;white-space:nowrap}
+  body.t-cloud .tbl td[data-k="cloud"] .cld{font-size:10px;white-space:nowrap}
   .badges{margin-top:4px;gap:3px}
   .badges .mb.above{display:inline-flex}
   .fgroup.scroll{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;max-width:100%;padding-bottom:1px}

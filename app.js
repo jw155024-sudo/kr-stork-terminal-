@@ -90,6 +90,7 @@
     $("#cntInst").textContent = nf.format(st.filter(s => s.oq > 0 || s.oc > 0).length);
     $("#cntRose").textContent = nf.format(st.filter(s => s.pchp > 0).length);
     $("#cntPer").textContent = nf.format(st.filter(s => hasLowPer(s, "both", 1.5)).length);
+    $("#cntCloud").textContent = nf.format(st.filter(cloudOk).length);
     $("#cntMine").textContent = state.watch.size;
   }
 
@@ -168,6 +169,19 @@
     return s.per != null && s.per > 0 && s.per <= max && trendOk(s, mode);
   }
 
+  /* 구름대 돌파: 60·120일선 위 + 상승 초기(이격 120선 18%·60선 15% 이내) + 거래대금 30억·시총 1,000억↑
+     + 일목균형표 구름대 상단 돌파 완료(최근 5거래일) 또는 구름대 내부 진행형 */
+  const CLOUD = { va: 3e9, mc: 1e11, gap120: 18, gap60: 15 };
+  function cloudOk(s) {
+    const p = s.p, m60 = s.ma60, m120 = s.ma120;
+    if (!p || !m60 || !m120) return false;
+    if (!(p > m60 && p > m120)) return false;
+    if ((p - m120) / m120 * 100 > CLOUD.gap120) return false;
+    if ((p - m60) / m60 * 100 > CLOUD.gap60) return false;
+    if ((s.va || 0) < CLOUD.va || (s.mc || 0) < CLOUD.mc) return false;
+    return s.cs === 1 || s.cs === 2;
+  }
+
   function filtered() {
     const { data } = state;
     if (!data) return [];
@@ -202,6 +216,9 @@
     if (state.tab === "lowper") {
       // 추세전환(60·120일선 돌파) + PER 상한 이하(적자 제외)
       arr = arr.filter(s => hasLowPer(s, state.trend, state.perMax));
+    }
+    if (state.tab === "cloud") {
+      arr = arr.filter(cloudOk);
     }
     const k = state.sort.key, dir = state.sort.dir;
     arr = arr.slice().sort((a, b) => {
@@ -239,6 +256,17 @@
       if (s.per == null) return '<span class="flat">–</span>';
       const k = s.per <= 5 ? "per-lo" : s.per <= 10 ? "per-mid" : "per-over";
       return `<span class="perv ${k}">${s.per.toFixed(1)}배</span>`;
+    },
+    cloud: s => {
+      if (s.cs == null || s.ct == null) return '<span class="flat">–</span>';
+      const rng = `구름대 ${fmt(s.cb)}~${fmt(s.ct)}`;
+      if (s.cs === 2) {
+        const gap = (s.p / s.ct - 1) * 100;
+        return `<span class="mb brk" title="${rng} · 상단 돌파 +${gap.toFixed(1)}% (돌파 ${s.ca != null ? s.ca + "봉 전" : "초입"})">구름 돌파</span> <i class="cld up">+${gap.toFixed(1)}%</i>`;
+      }
+      const toTop = (s.ct / s.p - 1) * 100;
+      const pos = s.cp != null ? s.cp.toFixed(0) : "–";
+      return `<span class="mb in" title="${rng} · 구름대 내 ${pos}% 지점 · 상단까지 ${toTop.toFixed(1)}%">구름 진입</span> <i class="cld">상단 ${toTop.toFixed(1)}%</i>`;
     },
     pnl: s => {
       const h = state.holdings[s.c];
@@ -291,6 +319,14 @@
       { k: "fv", l: "외인 순매수", hideSm: 1 },
       { k: "r20", l: "20일" },
       { k: "va", l: "거래대금", hideSm: 1 }
+    ],
+    cloud: [
+      { k: "cloud", l: "구름대", sort: false, title: "일목균형표(9·26·52·26) 구름대 위치 · 돌파 완료/진입" },
+      { k: "chp", l: "등락률" },
+      { k: "per", l: "PER", title: "주가수익비율(배) · 적자(0 이하) 제외" },
+      { k: "fv", l: "외인 순매수", hideSm: 1 },
+      { k: "ma", l: "MA", hideSm: 1, sort: false },
+      { k: "va", l: "거래대금", hideSm: 1 }
     ]
   };
 
@@ -300,7 +336,8 @@
     inst: [["oq", "기관주수"], ["oc", "기관연속"], ["fv", "외인금액"], ["va", "거래대금"]],
     rose: [["chp", "오늘"], ["pchp", "전일"], ["c2d", "2일누적"], ["fc", "외인연속"], ["pc", "상승연속"]],
     mine: [["chp", "등락률"], ["pnl", "평가손익"], ["r20", "20일"], ["fc", "외인연속"]],
-    lowper: [["per", "PER 낮은순"], ["chp", "등락률"], ["r20", "20일"], ["fv", "외인금액"], ["va", "거래대금"]]
+    lowper: [["per", "PER 낮은순"], ["chp", "등락률"], ["r20", "20일"], ["fv", "외인금액"], ["va", "거래대금"]],
+    cloud: [["csc", "추천순"], ["chp", "등락률"], ["per", "PER 낮은순"], ["fv", "외인금액"], ["va", "거래대금"]]
   };
 
   const CHART_LABEL = { b60: "60일선 돌파", b120: "120일선 돌파", a60: "60일선 위", a120: "120일선 위" };
@@ -384,7 +421,7 @@
 
     const base = {
       all: "종합", foreign: "외국인 순매수 상위", inst: "기관 순매수 상위",
-      rose: "전일 상승 → 오늘", lowper: "추세전환 · 저PER", mine: "내 종목"
+      rose: "전일 상승 → 오늘", lowper: "추세전환 · 저PER", cloud: "구름대 돌파 초입", mine: "내 종목"
     }[state.tab];
     const bits = [];
     if (state.market !== "ALL") bits.push(state.market === "K" ? "코스피" : "코스닥");
@@ -412,6 +449,22 @@
     });
     renderRoseSum();
     renderLowPerSum(arr);
+    renderCloudSum(arr);
+  }
+
+  /* ──────────────── 구름대 돌파 한 줄 요약 ──────────────── */
+  function renderCloudSum(arr) {
+    const el = $("#cloudsum");
+    if (!el) return;
+    if (!state.data || state.tab !== "cloud") { el.hidden = true; return; }
+    el.hidden = false;
+    const brk = arr.filter(s => s.cs === 2).length;
+    const inside = arr.length - brk;
+    const k = arr.filter(s => s.m === "K").length;
+    el.innerHTML = `
+      <div class="rline">구름대 돌파 초입 <b>${nf.format(arr.length)}</b>종목 <span style="color:#63708a">(코스피 ${k} · 코스닥 ${arr.length - k})</span></div>
+      <div class="rmeta">구름대 상단 돌파 완료 <b>${nf.format(brk)}</b> · 구름대 내부 진행형 <b>${nf.format(inside)}</b> — 돌파 완료를 먼저, 그 안에서 추천 점수(외국인·기관 동반 순매수·외인 순매수·거래대금·흑자) 높은 순으로 위에서부터 보입니다.</div>
+      <div class="rmeta">기준: 60·120일선 위 · 120선 이漵 ≤18% · 60선 이漵 ≤15% · 거래대금 30억↑ · 시총 1,000억↑ · 일목균형표(9·26·52·26)</div>`;
   }
 
   /* ──────────────── 추세·저PER 한 줄 요약 ──────────────── */
@@ -550,7 +603,11 @@
       ["5일 수익률", signedTxt(s.r5, 2)],
       ["20일 수익률", signedTxt(s.r20, 2)],
       ["전일 등락률", signedTxt(s.pchp, 2)],
-      ["2일 누적", signedTxt(s.c2d, 2)]
+      ["2일 누적", signedTxt(s.c2d, 2)],
+      ["구름대", s.ct != null ? `${fmt(s.cb)}~${fmt(s.ct)}` : "–"],
+      ["구름 위치", s.cs === 2 ? `상단 돌파${s.ca ? " " + s.ca + "봉 전" : ""}`
+        : s.cs === 1 ? `내부 ${s.cp != null ? s.cp.toFixed(0) + "%" : "–"}`
+        : s.cs === 3 ? "구름대 위" : s.cs === 0 ? "구름대 아래" : "–"]
     ].map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join("");
 
     const fd = s.fd ? `${s.fd.slice(4, 6)}/${s.fd.slice(6, 8)}` : "–";
@@ -563,6 +620,9 @@
     if (s.b120) consec.push('<span class="mb brk">120일선 돌파</span>');
     if (!s.b60 && s.x60 != null && s.x60 <= 9) consec.push(`<span class="mb">60일선 돌파 ${s.x60}거래일 전</span>`);
     if (!s.b120 && s.x120 != null && s.x120 <= 9) consec.push(`<span class="mb">120일선 돌파 ${s.x120}거래일 전</span>`);
+    if (s.cs === 2) consec.push(`<span class="mb brk">구름대 상단 돌파${s.ca ? " " + s.ca + "봉 전" : " 초입"}</span>`);
+    else if (s.cs === 1) consec.push(`<span class="mb in">구름대 진입${s.cp != null ? " " + s.cp.toFixed(0) + "%" : ""}</span>`);
+    else if (s.cs === 3) consec.push('<span class="mb">구름대 위</span>');
 
     const hist = rows.slice(-16).reverse();
     const hrows = hist.map(r => {
@@ -1369,7 +1429,7 @@
       $$(".tab").forEach(x => x.classList.toggle("active", x === b));
       state.tab = b.dataset.tab;
       state.limit = 120;
-      const defaults = { all: ["va", -1], foreign: ["fv", -1], inst: ["oq", -1], rose: ["chp", -1], lowper: ["per", 1], mine: ["chp", -1] };
+      const defaults = { all: ["va", -1], foreign: ["fv", -1], inst: ["oq", -1], rose: ["chp", -1], lowper: ["per", 1], cloud: ["csc", -1], mine: ["chp", -1] };
       const [k, d] = defaults[state.tab] || ["va", -1];
       state.sort = { key: k, dir: d };
       document.body.classList.toggle("rose", state.tab === "rose");

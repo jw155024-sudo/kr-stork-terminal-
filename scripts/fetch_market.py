@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sys
@@ -51,6 +52,14 @@ FLOW_WINDOW = 30        # 연속 매수 계산에 쓰는 최대 거래일
 # NXT(넥스트레이드) 프리·애프터마켓 표시 시간대 (KST, 분 단위)
 NXT_PRE_FROM, NXT_PRE_TO = 8 * 60, 9 * 60            # 프리 08:00~08:50, 09:00 정규장 개장
 NXT_AFTER_FROM = 15 * 60 + 40                        # 애프터 15:40~20:00 (마감 뒤에도 당일 마지막 시세 유지)
+
+# 일목균형표 구름대(9·26·52·26) 돌파 탐지 — '구름대 돌파' 탭
+CLOUD_TENKAN, CLOUD_KIJUN, CLOUD_SPANB = 9, 26, 52   # 전환선 9 · 기준선 26 · 선행스팬2 52
+CLOUD_SHIFT = 25          # 오늘(idx)의 구름대는 25봉 전(ref=idx-25) 데이터의 선행스팬1·2
+CLOUD_BREAK_BARS = 5      # 구름대 상단을 '최근 5거래일 내' 돌파한 것으로 볼 범위
+CLOUD_VA_MIN = 3_000_000_000        # 거래대금 30억 원 이상
+CLOUD_MC_MIN = 100_000_000_000      # 시가총액 1,000억 원 이상
+CLOUD_GAP120_MAX, CLOUD_GAP60_MAX = 18.0, 15.0  # 상승 초기(과열 제외) 120일선·60일선 이격 상한 %
 
 
 # ---------------------------------------------------------------- http helpers
@@ -385,6 +394,139 @@ def days_since_break(closes: list[float], n: int, lookback: int = 9):
     return None
 
 
+def _mid(highs: list[float], lows: list[float], a: int, b: int) -> float:
+    """a~b봉 고가 최대·저가 최소의 중간값(일목균형표 계산용)."""
+    return (max(highs[a:b + 1]) + min(lows[a:b + 1])) / 2
+
+
+def cloud_at(highs: list[float], lows: list[float], i: int):
+    """i번째 봉 자리의 구름대 (하단, 상단). 데이터가 모자라면 None.
+
+    선행스팬은 25봉 앞으로 옮겨 그리므로 i번 봉의 구름대는 (i-25)봉에서 계산한
+    전환선·기준선 평균(선행스팬1)과 52봉 중간값(선행스팬2)이다.
+    """
+    ref = i - CLOUD_SHIFT
+    if ref < CLOUD_SPANB - 1 or i >= len(highs):
+        return None
+    tenkan = _mid(highs, lows, ref - (CLOUD_TENKAN - 1), ref)
+    kijun = _mid(highs, lows, ref - (CLOUD_KIJUN - 1), ref)
+    span_a = (tenkan + kijun) / 2
+    span_b = _mid(highs, lows, ref - (CLOUD_SPANB - 1), ref)
+    return (min(span_a, span_b), max(span_a, span_b))
+
+
+def cloud_state(closes: list[float], highs: list[float], lows: list[float]) -> dict | None:
+    """마지막 봉(오늘)의 구름대 위치 — {cs, cb, ct, ca 또는 cp}.
+
+    cs: 2 = 최근 5거래일 내 구름대 상단 돌파 완료(초입)
+        1 = 구름대 내부(하단~상단)에서 돌파 진행 중
+        3 = 구름대 위(돌파한 지 5거래일 초과)
+        0 = 구름대 아래
+    cb·ct: 구름대 하단·상단, ca: 상단 돌파 뒤 지난 봉 수(state 2), cp: 구름대 내 위치 %(state 1)
+    """
+    idx = len(closes) - 1
+    if idx < 0:
+        return None
+    cur = cloud_at(highs, lows, idx)
+    if not cur:
+        return None
+    cbot, ctop = cur
+    p = closes[idx]
+    if p is None:
+        return None
+    out = {"cb": round(cbot, 1), "ct": round(ctop, 1)}
+    if p < cbot:
+        out["cs"] = 0
+    elif p <= ctop:
+        out["cs"] = 1
+        out["cp"] = round((p - cbot) / (ctop - cbot) * 100, 1) if ctop > cbot else 100.0
+    else:
+        prev = cloud_at(highs, lows, idx - CLOUD_BREAK_BARS)
+        fresh = bool(prev) and closes[idx - CLOUD_BREAK_BARS] <= prev[1] * 1.01
+        if fresh:
+            age = 0
+            for k in range(1, CLOUD_BREAK_BARS + 1):
+                ci = cloud_at(highs, lows, idx - k)
+                if not ci or closes[idx - k] <= ci[1]:
+                    break
+                age = k
+            out["cs"] = 2
+            out["ca"] = age
+        else:
+            out["cs"] = 3
+    return out
+
+
+def cloud_score(st: dict) -> float | None:
+    """구름대 돌파 추천 점수(cloudScore). 높을수록 위에 노출.
+
+    구름대 상단 돌파 완료(500) > 구름대 내부 진행형(0) 순서를 크게 벌리고,
+    60·120일선 동시 돌파 · 상승 초기(이격 작음) · 52주 고점 대비 여유 · 거래대금 ·
+    시총 · 외국인/기관 순매수 · 흑자 PER · 과열 아닌 5일 흐름을 더한다.
+    """
+    cs = st.get("cs")
+    if cs not in (1, 2, 3):
+        return None
+    p, m60, m120 = st.get("p"), st.get("ma60"), st.get("ma120")
+    if not p or not m60 or not m120:
+        return None
+    up60 = (p - m60) / m60 * 100
+    up120 = (p - m120) / m120 * 100
+    sc = 500.0 if cs == 2 else 0.0
+    if st.get("b60") == 1 and st.get("b120") == 1:
+        sc += 80
+    elif st.get("b60") == 1 or st.get("b120") == 1:
+        sc += 45
+    elif ((st.get("x60") is not None and st["x60"] <= CLOUD_BREAK_BARS - 1)
+          or (st.get("x120") is not None and st["x120"] <= CLOUD_BREAK_BARS - 1)):
+        sc += 20
+    sc += max(0.0, CLOUD_GAP120_MAX - up120) * 2.5      # 120일선에 가까울수록 상승 초기
+    sc += max(0.0, CLOUD_GAP60_MAX - up60) * 1.5
+    hi = st.get("hi52")
+    if hi:
+        sc += max(0.0, min(45.0, (1 - p / hi) * 45)) * 0.18   # 52주 고점 대비 여유
+    va = st.get("va") or 0
+    if va > 0:
+        sc += min(30.0, max(0.0, (math.log10(va) - math.log10(CLOUD_VA_MIN)) * 10))
+    mc = st.get("mc") or 0
+    if mc > 0:
+        sc += min(10.0, max(0.0, (math.log10(mc) - math.log10(CLOUD_MC_MIN)) * 4))
+    fv = st.get("fv") or 0
+    if fv > 0:
+        sc += 15 + min(15.0, math.log10(1 + fv / 1e8) * 8)
+    if (st.get("iq") or 0) > 0:
+        sc += 10
+    per = st.get("per")
+    if per and per > 0:
+        sc += 10
+        if per <= 20:
+            sc += 5
+    r5 = st.get("r5") or 0
+    if r5 > 0:
+        sc += min(12.0, r5) * 0.7
+    if r5 > 25:
+        sc -= (r5 - 25) * 0.8                            # 단기 과열 감점
+    if cs == 2:
+        sc += max(0, CLOUD_BREAK_BARS - (st.get("ca") or 0)) * 6   # 돌파 직후일수록 우선
+    elif cs == 1:
+        sc += (st.get("cp") or 0) / 100 * 20                        # 상단에 가까울수록 우선
+    return round(sc, 1)
+
+
+def cloud_tab_ok(s: dict) -> bool:
+    """'구름대 돌파' 탭 기본 노출 조건(60·120선 위 · 상승 초기 · 품질 필터 · 돌파/진입)."""
+    p, m60, m120 = s.get("p"), s.get("ma60"), s.get("ma120")
+    if not p or not m60 or not m120:
+        return False
+    if p <= m60 or p <= m120:
+        return False
+    if (p - m120) / m120 * 100 > CLOUD_GAP120_MAX or (p - m60) / m60 * 100 > CLOUD_GAP60_MAX:
+        return False
+    if (s.get("va") or 0) < CLOUD_VA_MIN or (s.get("mc") or 0) < CLOUD_MC_MIN:
+        return False
+    return s.get("cs") in (1, 2)
+
+
 def build_stock(row: dict, hist: list[list], trend: list[dict],
                 val: tuple[float | None, float | None] = (None, None)) -> dict:
     """개별 종목 계산. hist는 오래된→최신 순. val=(pbr, per)."""
@@ -399,7 +541,8 @@ def build_stock(row: dict, hist: list[list], trend: list[dict],
     hist.sort(key=lambda h: h[0])
 
     today = datetime.now(KST).strftime("%Y%m%d")
-    closes = [h[4] for h in hist if h[4] is not None]
+    bars = [h for h in hist if h[4] is not None]
+    closes = [b[4] for b in bars]
     if row.get("price") and hist and hist[-1][0] == today:
         closes[-1] = row["price"]
 
@@ -531,6 +674,20 @@ def build_stock(row: dict, hist: list[list], trend: list[dict],
     if len(closes) >= 6 and closes[-6]:
         st["r5"] = round((closes[-1] / closes[-6] - 1) * 100, 2)
 
+    # --- 일목균형표 구름대(9·26·52·26) 위치·돌파 상태와 추천 점수('구름대 돌파' 탭)
+    if px and len(closes) >= CLOUD_SPANB + CLOUD_SHIFT:
+        hh = [b[2] for b in bars]
+        ll = [b[3] for b in bars]
+        cc = list(closes)
+        if not has_today:                     # 오늘 봉이 아직 없으면 종가로 이어 붙여 계산
+            cc.append(px); hh.append(px); ll.append(px)
+        cinfo = cloud_state(cc, hh, ll)
+        if cinfo:
+            st.update(cinfo)
+            cs = cloud_score(st)
+            if cs is not None:
+                st["csc"] = cs
+
     # --- 상세용 히스토리 (최근 HIST_DAYS 거래일) : [d,o,h,l,c,v,fq,oq,iq]
     flow_by_date = {t["date"]: t for t in trend}
     rows = []
@@ -613,6 +770,90 @@ def load_prev() -> dict:
             return json.load(f)
     except Exception:  # noqa: BLE001
         return {}
+
+
+def merge_cloud() -> int:
+    """data/market.json + data/y/*.json 만으로 구름대 돌파 필드를 다시 계산해 병합한다(네트워크 없음).
+
+    30분 자동 갱신(main)은 수집하면서 함께 계산하므로, 이 경로는 이미 받아 둔
+    시세·차트 shard로 필드만 즉시 갱신할 때 쓴다: python3 scripts/fetch_market.py --merge-cloud
+    """
+    t0 = time.time()
+    prev = load_prev()
+    stocks = prev.get("stocks") or []
+    if not stocks:
+        print("ERROR: data/market.json 에 종목이 없습니다.", file=sys.stderr)
+        return 2
+    try:
+        today = int(str(prev.get("tradeDate") or "").replace("-", "")[2:])
+    except ValueError:
+        today = 0
+
+    by_prefix: dict[str, list[dict]] = {}
+    for s in stocks:
+        by_prefix.setdefault(str(s.get("c") or "")[:4], []).append(s)
+
+    done = 0
+    for pref, group in by_prefix.items():
+        try:
+            with open(os.path.join(YDIR, f"{pref}.json"), encoding="utf-8") as f:
+                shard = json.load(f)
+        except Exception:  # noqa: BLE001
+            shard = {}
+        for s in group:
+            for k in ("cs", "cb", "ct", "ca", "cp", "csc"):
+                s.pop(k, None)
+            rows = shard.get(s.get("c")) or []
+            if not rows or not s.get("p"):
+                continue
+            closes = [r[4] for r in rows]
+            highs = [r[2] for r in rows]
+            lows = [r[3] for r in rows]
+            if int(rows[-1][0]) != today:   # 마지막 봉이 전일이면 오늘 종가를 이어 붙인다
+                closes.append(s["p"])
+                highs.append(s["p"])
+                lows.append(s["p"])
+            cinfo = cloud_state(closes, highs, lows)
+            if not cinfo:
+                continue
+            s.update(cinfo)
+            cs = cloud_score(s)
+            if cs is not None:
+                s["csc"] = cs
+            done += 1
+
+    cloud_n = sum(1 for s in stocks if cloud_tab_ok(s))
+    cloud_break_n = sum(1 for s in stocks if cloud_tab_ok(s) and s.get("cs") == 2)
+    counts = dict(prev.get("counts") or {})
+    counts.update({"cloud": cloud_n, "cloudBreak": cloud_break_n,
+                   "cloudInside": cloud_n - cloud_break_n})
+    prev["counts"] = counts
+    tmp = os.path.join(DATA, "market.json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(prev, f, ensure_ascii=False, separators=(",", ":"))
+    os.replace(tmp, os.path.join(DATA, "market.json"))
+
+    meta_path = os.path.join(DATA, "meta.json")
+    try:
+        with open(meta_path, encoding="utf-8") as f:
+            meta = json.load(f)
+    except Exception:  # noqa: BLE001
+        meta = {}
+    meta.update({"cloud": cloud_n, "cloudBreak": cloud_break_n})
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=1)
+
+    order = sorted((s for s in stocks if cloud_tab_ok(s)),
+                   key=lambda s: -(s.get("csc") or 0))
+    print(f"OK 구름대 계산 {done}종목 / 탭 대상 {cloud_n}종목 "
+          f"(돌파 완료 {cloud_break_n} · 내부 {cloud_n - cloud_break_n}) / {time.time() - t0:.1f}s",
+          flush=True)
+    for i, s in enumerate(order[:10], 1):
+        st = "돌파" if s.get("cs") == 2 else "진입"
+        print(f"  {i:2d}. {s.get('csc'):>6} {s['n']} ({s['c']}) p={s['p']} "
+              f"구름 {s.get('cb')}~{s.get('ct')} {st} PER={s.get('per')} "
+              f"거래대금={(s.get('va') or 0) / 1e8:.0f}억", flush=True)
+    return 0
 
 
 def main():
@@ -723,6 +964,8 @@ def main():
     low_per_n = low_per["le1_5"]
     low_pbr_n = sum(1 for s in summaries
                     if s.get("pbr") and s["pbr"] <= 1.0 and _trend_ok(s))
+    cloud_n = sum(1 for s in summaries if cloud_tab_ok(s))
+    cloud_break_n = sum(1 for s in summaries if cloud_tab_ok(s) and s.get("cs") == 2)
 
     payload = {
         "generatedAt": now.isoformat(timespec="seconds"),
@@ -737,6 +980,8 @@ def main():
             "pbr": pbr_n, "pbrFail": val_fail, "lowPbr": low_pbr_n,
             "per": per_n, "perFail": val_fail, "lowPer": low_per_n,
             "lowPerByCap": low_per,
+            "cloud": cloud_n, "cloudBreak": cloud_break_n,
+            "cloudInside": cloud_n - cloud_break_n,
         },
         "indices": indices,
         "macro": macro,
@@ -779,6 +1024,8 @@ def main():
         "per": per_n,
         "lowPer": low_per_n,
         "lowPerByCap": low_per,
+        "cloud": cloud_n,
+        "cloudBreak": cloud_break_n,
         "chartDays": round(y_rows / max(1, len(results))),
         "elapsedSec": round(time.time() - t0, 1),
     }
@@ -801,4 +1048,6 @@ def Done(a, b):  # noqa: N802 - 진행 로그
 
 
 if __name__ == "__main__":
+    if "--merge-cloud" in sys.argv:
+        sys.exit(merge_cloud())
     sys.exit(main())
