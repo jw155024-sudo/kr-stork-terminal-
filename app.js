@@ -913,6 +913,10 @@
     return out;
   }
 
+  function minViewBars() {           // 확대해도 남기는 최소 봉 수(주기별)
+    return CH.unit === "M" ? 3 : CH.unit === "W" ? 6 : 20;
+  }
+
   function unitDefaultN(unit, N) {
     if (!N) return 20;
     if (unit === "D") return Math.max(Math.min(20, N), Math.min(250, N));
@@ -989,7 +993,7 @@
     const volH = CH.volH, gapV = CH.gapV;
     const priceH = Math.max(60, CH.cssH - padT - padB - volH - gapV);
     const FUT = CH.opts.ichi ? 26 : 0;
-    const n = Math.max(Math.min(20, N), Math.min(CH.view.n, N));
+    const n = Math.max(Math.min(minViewBars(), N), Math.min(CH.view.n, N));
     const end = Math.max(n, Math.min(CH.view.end || N, N));
     const start = Math.max(0, end - n);
     const cnt = end - start;
@@ -1245,7 +1249,7 @@
     const barW = G.plotW * (G.cnt / (G.cnt + G.FUT));
     const frac = Math.max(0, Math.min(1, (xPx - G.padL) / Math.max(1, barW)));
     const anchor = G.start + frac * G.cnt;
-    const n1 = Math.max(Math.min(20, N), Math.min(N, Math.round(G.n * f)));
+    const n1 = Math.max(Math.min(minViewBars(), N), Math.min(N, Math.round(G.n * f)));
     let end1 = Math.round(anchor + (1 - frac) * n1);
     end1 = Math.max(n1, Math.min(N, end1));
     CH.view.n = n1; CH.view.end = end1;
@@ -1369,7 +1373,7 @@
         const P = CH.pinch, N = CH.rows.length;
         const anchor = (P.end0 - P.n0) + P.frac * P.n0;
         let n1 = Math.round(P.n0 * P.d / d);
-        n1 = Math.max(Math.min(20, N), Math.min(N, n1));
+        n1 = Math.max(Math.min(minViewBars(), N), Math.min(N, n1));
         let end1 = Math.round(anchor + (1 - P.frac) * n1);
         end1 = Math.max(n1, Math.min(N, end1));
         if (n1 !== CH.view.n || end1 !== CH.view.end) {
@@ -1437,7 +1441,7 @@
       const N = CH.rows.length;
       if (b.dataset.rng) {
         const n = Math.min(N, Number(b.dataset.rng));
-        CH.view = { n: Math.max(Math.min(20, N), n), end: N };
+        CH.view = { n: Math.max(Math.min(minViewBars(), N), n), end: N };
         CH.hover = null; hideTip(); chartDraw();
       } else if (b.id === "chZi") chartZoom(0.72, CH.padL + (CH.cssW - CH.padL - CH.padR) / 2);
       else if (b.id === "chZo") chartZoom(1.38, CH.padL + (CH.cssW - CH.padL - CH.padR) / 2);
